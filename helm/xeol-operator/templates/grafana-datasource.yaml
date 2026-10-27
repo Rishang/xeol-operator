@@ -1,0 +1,27 @@
+{{- if .Values.grafanaDatasource.enabled }}
+{{- $url := printf "http://%s-metrics.%s.svc:%v" (include "xeol-operator.fullname" .) .Release.Namespace .Values.metrics.port }}
+# Infinity datasource pointing at the operator's JSON API, picked up by Grafana's datasource sidecar.
+# Requires the yesoreyeram-infinity-datasource plugin in Grafana.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}-datasource
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "xeol-operator.labels" . | nindent 4 }}
+    {{- with .Values.grafanaDatasource.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  xeol-operator-datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: xeol-operator
+        uid: xeol-operator
+        type: yesoreyeram-infinity-datasource
+        access: proxy
+        url: {{ $url }}
+        jsonData:
+          allowedHosts:
+            - {{ $url }}
+{{- end }}

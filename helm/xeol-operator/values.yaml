@@ -1,0 +1,117 @@
+image:
+  repository: docker.io/rishang/xeol-operator   # Docker Hub
+  tag: ""                       # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []            # for pulling the operator image itself
+
+# Rendered into XeolScanner/default.
+scanner:
+  namespaceSelector: {}         # e.g. {matchLabels: {xeol-scan: "true"}}; empty = all namespaces
+  excludeNamespaces: ["kube-*"]
+  excludeImages: []             # globs on the image reference
+  interval: 24h                 # rescan each image digest this often
+  workloadKinds: []             # top-level kinds to scan; empty = CRD default [Deployment, StatefulSet, DaemonSet, Job, CronJob]
+  workloadLabels: []            # workload label keys copied onto metrics as k8s_label_<key>, e.g. [team]
+  # Accepted findings hidden from metrics, the JSON API and status (images are still scanned). See docs/crd.md.
+  #   - products: [perl]                                   # endoflife.date slugs
+  #     namespaces: [test]                                 # optional namespace globs
+  #   - products: [gorilla]
+  #     selector: {matchLabels: {app.kubernetes.io/name: grafana}}   # optional, workload's own labels
+  #   - products: [python]
+  #     cycles: ["3.8"]                                    # optional release cycles
+  ignoreProducts: []
+  # Operator flags. A scan's memory depends on the image (small images ~200Mi); an image that needs
+  # more than the pod's memory limit is skipped for 24h and reported as xeol_scan_errors_total{reason="oom"}.
+  workers: 1
+  timeout: 10m
+  goMemLimit: 800MiB            # GOMEMLIMIT for syft and xeol: keep below resources.limits.memory
+  maxProcs: 2                   # GOMAXPROCS for syft and xeol
+
+# EOL database xeol matches against.
+db:
+  # online: the operator builds it from endoflife.date at start and daily (needs egress to endoflife.date).
+  # mounted: read a prebuilt DB from a volume (air-gapped; see docs/air-gapped.md).
+  source: online
+  # online mode: endoflife.date products/full URL; point at an internal mirror if needed.
+  url: https://endoflife.date/api/v1/products/full
+  mounted:
+    path: /xeol-db
+    # Any volume source holding <path>/1/xeol.db, mounted read-only, e.g.
+    #   persistentVolumeClaim: {claimName: xeol-db}
+    volume: {}
+    # Or copy the DB out of an image at startup. The image needs `sh` and the DB at /db
+    # (e.g. FROM busybox + COPY db /db). Takes precedence over `volume`.
+    initContainer:
+      image: ""
+      command: ["sh", "-c", "cp -r /db/. /xeol-db/"]
+
+# Scratch space for image layers syft unpacks during a scan; removed after each scan.
+scanTmp:
+  sizeLimit: 4Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+replicas: 1
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+# Port for /metrics, the JSON API (/api/v1/*), and the UI and MCP when enabled. Plain HTTP, no auth.
+metrics:
+  port: 8080
+
+# Built-in web page at /: tiles, an EOL timeline (click a dot to filter), a sortable and filterable findings
+# table, workload and namespace summaries. For clusters without Grafana. The browser loads htmx from jsDelivr;
+# without it, filters still work by page reload.
+# Read-only, no auth: reach it with kubectl port-forward; don't expose it via an Ingress.
+ui:
+  enabled: false
+
+# MCP over HTTP at /mcp (Streamable HTTP, stateless) for AI assistants, e.g.
+#   claude mcp add --transport http xeol http://localhost:8080/mcp
+# Read-only tools status, namespaces, workloads, findings: same data as the JSON API. No auth; cross-origin
+# browser requests are refused.
+mcp:
+  enabled: false
+
+# ServiceMonitor: the Prometheus Operator scrapes /metrics, so findings are in Prometheus for PromQL,
+# history and alerts. Needs the Prometheus Operator (e.g. kube-prometheus-stack).
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  labels: {}                    # e.g. {release: kube-prom-stack} if your Prometheus selects by label
+
+# PrometheusRule: alert rules only (no recording rules), sent through Alertmanager:
+#   XeolEOLSoftwareRunning  software past EOL is running
+#   XeolEOLSoftwareSoon     software reaches EOL within eolSoonDays
+#   XeolDatabaseStale       EOL database older than dbStaleDays
+#   XeolDatabaseMissing     no EOL database, so nothing is scanned
+#   XeolScanErrors          more than 5 failed scans with one reason in an hour
+# Needs the Prometheus Operator, and serviceMonitor.enabled (or your own scrape) for data.
+prometheusRule:
+  enabled: false
+  labels: {}                    # e.g. {release: kube-prom-stack} if your Prometheus selects rules by label
+  eolSoonDays: 90               # XeolEOLSoftwareSoon threshold
+  dbStaleDays: 30               # XeolDatabaseStale threshold
+
+# Grafana: two ConfigMaps, an Infinity datasource (uid xeol-operator) pointing at the JSON API and the
+# dashboard that uses it. Grafana's datasource and dashboard sidecars pick them up by label; the chart
+# never contacts Grafana. Needs the Infinity plugin (yesoreyeram-infinity-datasource) and sidecars
+# watching this namespace (searchNamespace: ALL). Doesn't need Prometheus.
+grafanaDatasource:
+  enabled: false                # also installs the dashboard
+  labels:
+    grafana_datasource: "1"     # match your datasource sidecar's label
+
+# The dashboard ConfigMap, installed with grafanaDatasource.enabled.
+grafanaDashboard:
+  labels:
+    grafana_dashboard: "1"      # match your dashboard sidecar's label
+  annotations: {}               # e.g. {grafana_folder: Security} to pick a folder

@@ -1,0 +1,153 @@
+version: "3"
+
+vars:
+  IMG: '{{.IMG | default "xeol-operator:dev"}}'
+  # Never rely on the current kube context; prod contexts share this kubeconfig.
+  KUBE_CONTEXT: '{{.KUBE_CONTEXT | default "k3d-k3s-default"}}'
+  K3D_CLUSTER: '{{.K3D_CLUSTER | default "k3s-default"}}'
+  KIND_CLUSTER: '{{.KIND_CLUSTER | default "xeol-operator-test-e2e"}}'
+  CHART: helm/xeol-operator
+  NS: xeol-system
+  LOCALBIN: '{{.ROOT_DIR}}/bin'
+  CONTROLLER_GEN: '{{.LOCALBIN}}/controller-gen'
+  ENVTEST: '{{.LOCALBIN}}/setup-envtest'
+  GOLANGCI_LINT: '{{.LOCALBIN}}/golangci-lint'
+  CONTROLLER_TOOLS_VERSION: v0.23.0
+  GOLANGCI_LINT_VERSION: v2.15.0
+  ENVTEST_VERSION:
+    sh: go list -m sigs.k8s.io/controller-runtime | cut -d' ' -f2
+  ENVTEST_K8S_VERSION:
+    sh: go list -m k8s.io/api | sed -E 's/.* v?[0-9]+\.([0-9]+).*/1.\1/'
+
+tasks:
+  generate:
+    desc: Generate DeepCopy code
+    deps: [tools]
+    cmds:
+      - '{{.CONTROLLER_GEN}} object:headerFile="hack/boilerplate.go.txt",year={{now | date "2006"}} paths="{./api/...,./internal/...,./cmd/...}"'
+
+  manifests:
+    desc: Generate CRD and RBAC manifests
+    deps: [tools]
+    cmds:
+      - '{{.CONTROLLER_GEN}} rbac:roleName=manager-role crd paths="{./api/...,./internal/...,./cmd/...}" output:crd:artifacts:config=config/crd/bases'
+
+  check:
+    internal: true
+    run: once
+    deps: [manifests, generate]
+    cmds: [go fmt ./..., go vet ./...]
+
+  test:
+    desc: Unit and envtest tests
+    deps: [check]
+    cmds:
+      - KUBEBUILDER_ASSETS="$({{.ENVTEST}} use {{.ENVTEST_K8S_VERSION}} --bin-dir {{.LOCALBIN}} -p path)" go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+  test-e2e:
+    desc: e2e tests in a throwaway Kind cluster (kind-{{.KIND_CLUSTER}})
+    deps: [check]
+    cmds:
+      - kind get clusters | grep -qx {{.KIND_CLUSTER}} || kind create cluster --name {{.KIND_CLUSTER}}
+      - defer: kind delete cluster --name {{.KIND_CLUSTER}}
+      - KIND_CLUSTER={{.KIND_CLUSTER}} go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+
+  e2e-deploy:
+    desc: Install CRDs and the kustomize deployment into the e2e Kind cluster
+    deps: [manifests]
+    cmds:
+      - kubectl --context kind-{{.KIND_CLUSTER}} apply --server-side -k config/default
+      - kubectl --context kind-{{.KIND_CLUSTER}} -n xeol-operator-system set image deployment/xeol-operator-controller-manager manager={{.IMG}}
+
+  e2e-undeploy:
+    desc: Remove the kustomize deployment and CRDs from the e2e Kind cluster
+    cmds:
+      - kubectl --context kind-{{.KIND_CLUSTER}} delete --ignore-not-found -k config/default
+
+  lint:
+    desc: golangci-lint (custom build with the logcheck plugin)
+    deps: [tools]
+    cmds:
+      - '{{.GOLANGCI_LINT}} config verify'
+      - '{{.GOLANGCI_LINT}} run {{.CLI_ARGS}}'
+
+  tools:
+    desc: Install pinned dev tools into bin/
+    run: once
+    cmds:
+      - task: go-install
+        vars: {NAME: controller-gen, BIN: '{{.CONTROLLER_GEN}}', PKG: sigs.k8s.io/controller-tools/cmd/controller-gen, VER: '{{.CONTROLLER_TOOLS_VERSION}}'}
+      - task: go-install
+        vars: {NAME: setup-envtest, BIN: '{{.ENVTEST}}', PKG: sigs.k8s.io/controller-runtime/tools/setup-envtest, VER: '{{.ENVTEST_VERSION}}'}
+      - task: go-install
+        vars: {NAME: golangci-lint, BIN: '{{.GOLANGCI_LINT}}-base', PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint, VER: '{{.GOLANGCI_LINT_VERSION}}'}
+      - cmd: |
+          [ -f {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom ] || {
+            {{.GOLANGCI_LINT}}-base custom --destination {{.LOCALBIN}} --name golangci-lint-custom
+            mv -f {{.LOCALBIN}}/golangci-lint-custom {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom
+          }
+          ln -sf {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom {{.GOLANGCI_LINT}}
+
+  go-install:
+    internal: true
+    # versioned binary + symlink: a version bump reinstalls
+    status: ['[ "$(readlink {{.BIN}})" = "{{.BIN}}-{{.VER}}" ]']
+    cmds:
+      - mkdir -p {{.LOCALBIN}}
+      - '[ -f {{.BIN}}-{{.VER}} ] || { GOBIN={{.LOCALBIN}} go install {{.PKG}}@{{.VER}} && mv {{.LOCALBIN}}/{{.NAME}} {{.BIN}}-{{.VER}}; }'
+      - ln -sf {{.BIN}}-{{.VER}} {{.BIN}}
+
+  run:
+    desc: Run the operator locally against the k3d cluster
+    cmds:
+      - kubectl --context {{.KUBE_CONTEXT}} apply --server-side -f config/crd/bases
+      # minified kubeconfig holding only the test context, so the operator can't reach anything else
+      - mkdir -p {{.LOCALBIN}} && kubectl config view --minify --flatten --context {{.KUBE_CONTEXT}} > bin/test.kubeconfig
+      - go run ./cmd --kubeconfig bin/test.kubeconfig --metrics-bind-address :8080 --metrics-secure=false {{.CLI_ARGS}}
+
+  docker-build:
+    desc: Build the operator image
+    cmds: ['docker build -t {{.IMG}} .']
+
+  deploy-dev:
+    desc: Build the image, load it into k3d and install with Helm
+    deps: [docker-build]
+    cmds:
+      - k3d image import {{.IMG}} -c {{.K3D_CLUSTER}}
+      # helm installs crds/ only once and never upgrades them
+      - kubectl --context {{.KUBE_CONTEXT}} apply --server-side -f {{.CHART}}/crds
+      - >-
+        helm upgrade --install xeol-operator {{.CHART}} --kube-context {{.KUBE_CONTEXT}}
+        -n {{.NS}} --create-namespace
+        --set image.repository={{splitList ":" .IMG | first}} --set image.tag={{splitList ":" .IMG | last}}
+        --set image.pullPolicy=Never {{.CLI_ARGS}}
+      # the tag stays the same, so helm alone never replaces the pod
+      - kubectl --context {{.KUBE_CONTEXT}} -n {{.NS}} rollout restart deploy/xeol-operator
+      - kubectl --context {{.KUBE_CONTEXT}} -n {{.NS}} rollout status deploy/xeol-operator --timeout=300s
+
+  build-db:
+    desc: Build xeol's EOL database from endoflife.date into ./db
+    cmds: ['go run ./cmd build-db --out {{.OUT | default "db"}}']
+
+  chart-crds:
+    desc: Copy generated CRDs into the Helm chart
+    deps: [manifests]
+    cmds:
+      - mkdir -p {{.CHART}}/crds
+      - cp config/crd/bases/*.yaml {{.CHART}}/crds/
+
+  chart-check:
+    desc: Fail if the chart CRDs drift from the generated ones
+    deps: [manifests]
+    cmds:
+      - diff -r config/crd/bases {{.CHART}}/crds
+
+  chart-test:
+    desc: Lint the chart and render it with each feature toggle
+    cmds:
+      - helm lint {{.CHART}}
+      - helm template t {{.CHART}} > /dev/null
+      - helm template t {{.CHART}} --set serviceMonitor.enabled=true,prometheusRule.enabled=true,grafanaDatasource.enabled=true,ui.enabled=true,mcp.enabled=true > /dev/null
+      - helm template t {{.CHART}} --set db.source=mounted,db.mounted.volume.persistentVolumeClaim.claimName=xeol-db > /dev/null
+      - helm template t {{.CHART}} --set db.source=mounted,db.mounted.initContainer.image=registry.local/xeol-db:latest > /dev/null
+      - helm template t {{.CHART}} --set-json 'scanner.ignoreProducts=[{"products":["perl"],"namespaces":["test"]}]' | grep -q 'ignoreProducts'

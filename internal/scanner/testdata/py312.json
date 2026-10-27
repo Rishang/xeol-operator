@@ -1,0 +1,227 @@
+{
+  "matches": [
+    {
+      "Cycle": {
+        "ProductName": "Debian",
+        "ProductPermalink": "https://endoflife.date/debian",
+        "ReleaseCycle": "13",
+        "Eol": "2030-06-30",
+        "LatestRelease": "13.7",
+        "LatestReleaseDate": "2026-09-12",
+        "ReleaseDate": "2025-08-09"
+      },
+      "Package": {
+        "ID": "",
+        "Name": "",
+        "Version": "",
+        "Locations": {},
+        "Language": "",
+        "Licenses": null,
+        "Type": "",
+        "CPEs": null,
+        "PURL": "",
+        "Upstreams": null,
+        "MetadataType": "",
+        "Metadata": null
+      },
+      "artifact": {
+        "name": "Debian GNU/Linux",
+        "version": "13",
+        "type": "os",
+        "locations": [],
+        "language": "",
+        "licenses": [],
+        "cpes": [],
+        "purl": "",
+        "upstreams": []
+      }
+    },
+    {
+      "Cycle": {
+        "ProductName": "Perl",
+        "ProductPermalink": "https://endoflife.date/perl",
+        "ReleaseCycle": "5.40",
+        "Eol": "2027-06-09",
+        "LatestRelease": "5.40.5",
+        "LatestReleaseDate": "2026-08-02",
+        "ReleaseDate": "2024-06-09"
+      },
+      "Package": {
+        "ID": "",
+        "Name": "",
+        "Version": "",
+        "Locations": {},
+        "Language": "",
+        "Licenses": null,
+        "Type": "",
+        "CPEs": null,
+        "PURL": "",
+        "Upstreams": null,
+        "MetadataType": "",
+        "Metadata": null
+      },
+      "artifact": {
+        "name": "perl-base",
+        "version": "5.40.1-6+deb13u1",
+        "type": "deb",
+        "locations": [
+          {
+            "path": "/usr/share/doc/perl-base/copyright",
+            "layerID": "sha256:a70f6272827f64e1427d048ced77491aab5d64ab95725e56920802ff391197d7"
+          },
+          {
+            "path": "/var/lib/dpkg/info/perl-base.md5sums",
+            "layerID": "sha256:a70f6272827f64e1427d048ced77491aab5d64ab95725e56920802ff391197d7"
+          },
+          {
+            "path": "/var/lib/dpkg/status",
+            "layerID": "sha256:500ecb68a701ad0437ae759f35178f2ddbc48e10a0bc6dc345548054f737df6a"
+          }
+        ],
+        "language": "",
+        "licenses": [
+          "Artistic",
+          "Artistic-2",
+          "Artistic-dist",
+          "BSD-3-clause",
+          "BSD-3-clause-GENERIC",
+          "BSD-3-clause-with-weird-numbering",
+          "BSD-4-clause-POWERDOG",
+          "BZIP",
+          "DONT-CHANGE-THE-GPL",
+          "Expat",
+          "FSFAP",
+          "GPL-1",
+          "GPL-1+",
+          "GPL-2",
+          "GPL-2+",
+          "GPL-3+-WITH-BISON-EXCEPTION",
+          "LGPL-2.1",
+          "REGCOMP",
+          "REGCOMP,",
+          "SDBM-PUBLIC-DOMAIN",
+          "TEXT-TABS",
+          "Unicode",
+          "ZLIB"
+        ],
+        "cpes": [
+          "cpe:2.3:a:perl-base:perl-base:5.40.1-6+deb13u1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:perl-base:perl_base:5.40.1-6+deb13u1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:perl_base:perl-base:5.40.1-6+deb13u1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:perl_base:perl_base:5.40.1-6+deb13u1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:perl:perl-base:5.40.1-6+deb13u1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:perl:perl_base:5.40.1-6+deb13u1:*:*:*:*:*:*:*"
+        ],
+        "purl": "pkg:deb/debian/perl-base@5.40.1-6%2Bdeb13u1?arch=amd64&upstream=perl&distro=debian-13",
+        "upstreams": [
+          {
+            "name": "perl"
+          }
+        ]
+      }
+    },
+    {
+      "Cycle": {
+        "ProductName": "Python",
+        "ProductPermalink": "https://endoflife.date/python",
+        "ReleaseCycle": "3.12",
+        "Eol": "2028-10-31",
+        "LatestRelease": "3.12.16",
+        "LatestReleaseDate": "2026-10-25",
+        "ReleaseDate": "2023-10-02"
+      },
+      "Package": {
+        "ID": "",
+        "Name": "",
+        "Version": "",
+        "Locations": {},
+        "Language": "",
+        "Licenses": null,
+        "Type": "",
+        "CPEs": null,
+        "PURL": "",
+        "Upstreams": null,
+        "MetadataType": "",
+        "Metadata": null
+      },
+      "artifact": {
+        "name": "python",
+        "version": "3.12.15",
+        "type": "binary",
+        "locations": [
+          {
+            "path": "/usr/local/bin/python3.12",
+            "layerID": "sha256:500ecb68a701ad0437ae759f35178f2ddbc48e10a0bc6dc345548054f737df6a"
+          },
+          {
+            "path": "/usr/local/lib/libpython3.12.so.1.0",
+            "layerID": "sha256:500ecb68a701ad0437ae759f35178f2ddbc48e10a0bc6dc345548054f737df6a"
+          }
+        ],
+        "language": "",
+        "licenses": [],
+        "cpes": [
+          "cpe:2.3:a:python_software_foundation:python:3.12.15:*:*:*:*:*:*:*",
+          "cpe:2.3:a:python:python:3.12.15:*:*:*:*:*:*:*",
+          "cpe:2.3:a:python:python:3.12.15:*:*:*:*:*:*:*"
+        ],
+        "purl": "pkg:generic/python@3.12.15",
+        "upstreams": []
+      }
+    }
+  ],
+  "source": {
+    "type": "image",
+    "target": {
+      "userInput": "python:3.12-slim",
+      "imageID": "sha256:a33c10a97f11005523814c6eee013986119fe41f3122f444518117536675c8e1",
+      "manifestDigest": "sha256:e8a38829209aea82774882e5157e1f7c3e8c8393ff53a697b3580896e57f345c",
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "tags": [],
+      "imageSize": 119425579,
+      "layers": [
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:a70f6272827f64e1427d048ced77491aab5d64ab95725e56920802ff391197d7",
+          "size": 78821571
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:33d3a946838548b1885b1068b960a88e41537b6996342c8fc2c767a6879e62f4",
+          "size": 3792132
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:500ecb68a701ad0437ae759f35178f2ddbc48e10a0bc6dc345548054f737df6a",
+          "size": 36811876
+        },
+        {
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "digest": "sha256:93881a54803b57e0039f40fd78de98b41b69b55d025c431544788fd84f0904cd",
+          "size": 0
+        }
+      ],
+      "repoDigests": [
+        "index.docker.io/library/python@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704"
+      ],
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "distro": {
+    "name": "debian",
+    "version": "13",
+    "idLike": []
+  },
+  "descriptor": {
+    "name": "xeol",
+    "version": "[not provided]",
+    "db": {
+      "built": "2026-10-26T11:30:46.687752Z",
+      "schemaVersion": 1,
+      "location": "/tmp/claude-1000/-home-rishang-Documents-me-github-xeol-operator/c12f4e69-0bdc-449c-80f8-e6fd109a5620/scratchpad/eoldb/1",
+      "checksum": "sha256:37ca800d2a19e15e269539985fc04fbda357939eae639f1661cf5dec0462be3f",
+      "error": null
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "xeol-operator.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: xeol-operator
+      rules:
+        # Per image and product; the dashboard joins images to workloads on `digest`.
+        - alert: XeolEOLSoftwareRunning
+          expr: xeol_eol_date_seconds < time()
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $labels.product }} {{ $labels.cycle }}`}} is end-of-life and running"
+            description: "Image {{`{{ $labels.image }}`}} ({{`{{ $labels.digest }}`}}) contains {{`{{ $labels.package }} {{ $labels.version }}`}}, which reached end-of-life. See which workloads run it on the xeol dashboard."
+        - alert: XeolEOLSoftwareSoon
+          expr: (xeol_eol_date_seconds - time()) > 0 < {{ .Values.prometheusRule.eolSoonDays }} * 86400   # value: seconds left
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: "{{`{{ $labels.product }} {{ $labels.cycle }}`}} reaches end-of-life within {{ .Values.prometheusRule.eolSoonDays }} days"
+            description: "Image {{`{{ $labels.image }}`}} contains {{`{{ $labels.package }} {{ $labels.version }}`}}; EOL in {{`{{ $value | humanizeDuration }}`}}."
+        - alert: XeolDatabaseStale
+          expr: time() - xeol_db_built_timestamp_seconds > {{ .Values.prometheusRule.dbStaleDays }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: xeol-operator EOL database is older than {{ .Values.prometheusRule.dbStaleDays }} days
+            description: "The EOL database was built {{`{{ $value | humanizeDuration }}`}} ago. Online mode: check egress to endoflife.date. Mounted mode: refresh the volume with `xeol-operator build-db`."
+        - alert: XeolDatabaseMissing
+          expr: absent(xeol_db_built_timestamp_seconds)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: xeol-operator has no EOL database, so nothing is being scanned
+        - alert: XeolScanErrors
+          expr: sum by (reason) (increase(xeol_scan_errors_total[1h])) > 5
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: "xeol scans failing: {{`{{ $labels.reason }}`}}"
+            description: "More than 5 scans failed with reason {{`{{ $labels.reason }}`}} in the last hour. auth usually means a missing imagePullSecret."
+{{- end }}

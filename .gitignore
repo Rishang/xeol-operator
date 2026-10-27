@@ -1,0 +1,5 @@
+.local/
+bin/
+cover.out
+Dockerfile.cross
+*.test

@@ -1,0 +1,17 @@
+schema: spec-driven
+
+# Project context shown to AI when creating artifacts.
+# AGENTS.md is the source of truth; don't duplicate it here.
+context: |
+  Kubernetes operator (Go, kubebuilder/controller-runtime) that scans running
+  container images with the xeol CLI for end-of-life software and exposes the
+  findings as Prometheus metrics for Grafana.
+  Read AGENTS.md (architecture, metrics, verified xeol CLI facts, conventions)
+  and every .local/context/*.md file if present before writing any artifact.
+
+rules:
+  proposal:
+    - Include a "Non-goals" section
+    - Call out any new CRD field, metric, or label and why it's needed
+  tasks:
+    - Each task ends with a runnable check (go test, task target, or kubectl step)

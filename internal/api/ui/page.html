@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyEnabled":false}'>
+<title>xeol-operator</title>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous" defer></script>
+<style>
+  :root {
+    --paper: #eef1f4; --sheet: #f8fafb; --ink: #17212b; --muted: #5b6875; --rule: #d3dae1;
+    --eol: #b0124e; --eol-wash: #f7e3eb; --soon: #a86400; --soon-wash: #f8ecd9; --steel: #2e6e8e;
+    --ok: #3d8b4f; --bad: #c62835; --warn: #b7791f; --due: #f2cc0c;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121a22; --sheet: #18222c; --ink: #e4eaf0; --muted: #93a1af; --rule: #2b3846;
+      --eol: #ff6f9b; --eol-wash: #3a1726; --soon: #f2b14f; --soon-wash: #382a12; --steel: #79b6d4;
+      --ok: #3f8f4f; --bad: #d23043; --warn: #b5791e; --due: #e0b400;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
+  .wrap { max-width: 1680px; margin: 0 auto; padding: 0 16px; }
+  a { color: var(--steel); text-underline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--steel); outline-offset: 2px; }
+
+  .top { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; padding: 20px 0 12px; border-bottom: 1px solid var(--rule); }
+  .brand { font-weight: 650; letter-spacing: -0.01em; }
+  .brand small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+  form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+  label { display: grid; gap: 3px; font-size: 13px; color: var(--muted); }
+  select, input, button { font: inherit; color: var(--ink); background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 10px; min-height: 34px; }
+  input[type=search] { width: 220px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:active { transform: translateY(1px); background: var(--paper); }
+  .refresh { display: inline-flex; align-items: center; gap: 6px; }
+  .refresh::before { content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: none; }
+  #filters.htmx-request .refresh::before { display: inline-block; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stamp { margin: 28px 0 0; font-size: 12.5px; color: var(--muted); }
+  .stamp span { padding: 1px 6px; border-radius: 4px; animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--steel); color: var(--sheet); } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { #filters.htmx-request .refresh::before, .stamp span { animation: none; } }
+
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* Stat boxes: filled by state, like Grafana stat panels. */
+  .tiles { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin: 10px 0 28px; }
+  @media (max-width: 1100px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile { display: flex; flex-direction: column; min-height: 132px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); overflow: hidden; }
+  .tile.wide { grid-column: span 2; }
+  .tile h2 { margin: 0; padding: 9px 12px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--sheet); color: var(--ink); }
+  .tile > b, .split b, .cells b { font-size: clamp(30px, 3.4vw, 48px); font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
+  .tile > b { flex: 1; display: flex; align-items: center; justify-content: center; gap: .25em; padding: 8px; white-space: nowrap; }
+  .tile b span { font-size: .55em; padding-top: .3em; }
+  .tile.good > b { background: var(--ok); color: #fff; } .tile.bad > b { background: var(--bad); color: #fff; } .tile.warn > b { background: var(--warn); color: #fff; }
+  .split { flex: 1; display: grid; grid-template-columns: 1fr 1fr; align-items: center; text-align: center; padding: 8px; }
+  .split small, .cells small { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .cells { flex: 1; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 3px; }
+  .cells > div { position: relative; display: grid; place-content: center; text-align: center; border-radius: 6px; color: #fff; padding-top: 16px; }
+  .tile.wide { overflow: visible; }
+  .info { position: absolute; top: 5px; right: 5px; width: 15px; height: 15px; border: 1.5px solid currentColor; border-radius: 50%;
+          font: italic 600 10px/12px var(--serif); text-align: center; opacity: .8; cursor: help; }
+  .info:hover, .info:focus-visible { opacity: 1; outline: none; box-shadow: 0 0 0 2px rgb(255 255 255 / .5); }
+  .tip { display: none; position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: max-content; max-width: 380px;
+         padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); color: var(--ink);
+         box-shadow: 0 10px 30px rgb(0 0 0 / .25); text-align: left; font-size: 12.5px; line-height: 1.45; }
+  .tip p { margin: 0 0 4px; } .tip ul { margin: 0; padding-left: 16px; } .tip li { overflow-wrap: anywhere; }
+  .info:hover + .tip, .info:focus + .tip { display: block; }
+  .cells small { color: inherit; opacity: .9; }
+  .cells .good { background: var(--ok); } .cells .bad { background: var(--bad); }
+
+  /* The runway: a line for today; expired findings left of it, upcoming ones right. */
+  .runway { position: relative; height: 92px; background: linear-gradient(90deg, var(--eol-wash) 0 30%, var(--sheet) 30% 100%); border: 1px solid var(--rule); border-radius: 10px; }
+  .runway .today { position: absolute; left: 30%; top: -6px; bottom: -6px; width: 2px; background: var(--ink); }
+  .runway .mark { all: unset; box-sizing: border-box; position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+                  border-radius: 50%; border: 2px solid var(--sheet); cursor: pointer; transition: transform .1s; }
+  .runway .mark:hover, .runway .mark:focus-visible { transform: scale(1.4); box-shadow: 0 0 0 2px var(--ink); z-index: 1; }
+  .runway .mark.on { box-shadow: 0 0 0 2px var(--ink); } .runway .mark.dim { opacity: .3; }
+  .runway .mark.eol { background: var(--eol); }
+  .runway .mark.soon { background: var(--due); } .runway .mark.later { background: var(--ok); }
+  .runway .mark:nth-child(3n) { margin-top: -22px; } .runway .mark:nth-child(3n+1) { margin-top: 16px; }
+  .scale { position: relative; height: 20px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 6px 0 40px; }
+  .scale span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .scale span:first-child { transform: none; } .scale span:last-child { transform: translateX(-100%); }
+  .scale .t { color: var(--ink); font-weight: 600; }
+
+  h2 { font-size: 17px; margin: 0 0 4px; letter-spacing: -0.005em; }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  section { margin-bottom: 40px; }
+  .pair { display: grid; grid-template-columns: 3fr 2fr; gap: 32px; }
+  @media (max-width: 860px) { .pair { grid-template-columns: 1fr; } }
+  .table { overflow-x: auto; background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; vertical-align: baseline; }
+  th { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .img { white-space: normal; word-break: break-all; min-width: 200px; color: var(--muted); font-size: 13px; }
+  table.findings th { padding: 0; }
+  /* Drag a header's bottom-right corner to resize its column (CSS resize; resets when the table reloads). */
+  .th { display: flex; align-items: center; gap: 4px; padding: 0 14px 0 0; resize: horizontal; overflow: hidden; min-width: 70px; }
+  table.findings th + th { border-left: 1px solid var(--rule); }
+  th.num .th { justify-content: flex-end; }
+  .th .sort { all: unset; box-sizing: border-box; padding: 8px 0 8px 10px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  .th .sort:hover, th[aria-sort] .th .sort { color: var(--ink); }
+  th[aria-sort] { box-shadow: inset 0 -2px 0 var(--eol); }
+  .th .sort span { margin-left: 3px; }
+  .funnel { all: unset; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); cursor: pointer; }
+  .funnel:hover { color: var(--ink); background: var(--paper); }
+  .funnel.on { color: var(--sheet); background: var(--steel); }
+  .th .sort:focus-visible, .funnel:focus-visible { outline: 2px solid var(--steel); outline-offset: -2px; }
+  .funnel svg { width: 14px; height: 14px; }
+  /* Column filter popover: native popover, anchored under its funnel where the browser supports anchors. */
+  .pop { inset: auto; position-area: bottom span-right; position-try-fallbacks: flip-inline; margin: 4px 0 0;
+         width: 300px; max-width: calc(100vw - 32px); padding: 14px; border: 1px solid var(--rule); border-radius: 10px;
+         background: var(--sheet); color: var(--ink); box-shadow: 0 10px 30px rgb(0 0 0 / .25); font-weight: 400; text-align: left; }
+  .pop-title { margin: 0 0 8px; font-weight: 600; font-size: 13px; }
+  .pop input[type=search] { width: 100%; }
+  .pop .vals { max-height: 220px; overflow: auto; margin: 10px 0; display: grid; gap: 2px; }
+  .pop .vals label { display: flex; gap: 8px; align-items: center; padding: 3px 2px; font-size: 13.5px; color: var(--ink); }
+  .pop .vals input { margin: 0; }
+  .pop .acts { display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--rule); padding-top: 10px; }
+  .pop .acts .clear { margin-right: auto; }
+  .pop .acts .ok { background: var(--steel); border-color: var(--steel); color: var(--sheet); }
+  table.findings td { padding: 7px 10px; }
+  td.days { text-align: right; font-weight: 600; }
+  td.days.eol { color: var(--sheet); background: var(--eol); }
+  td.days.soon { color: #1d1d1b; background: var(--due); }
+  .pill { display: inline-block; min-width: 3.5em; padding: 0 6px; border-radius: 4px; text-align: right; font-variant-numeric: tabular-nums; }
+  .pill.eol { color: var(--eol); background: var(--eol-wash); } .pill.soon { color: var(--soon); background: var(--soon-wash); }
+  .zero { color: var(--muted); }
+  .wl { font-weight: 550; } .wl small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+  .empty { padding: 18px 14px; color: var(--muted); }
+  .notice { margin: 40px 0; padding: 16px 18px; border-left: 3px solid var(--soon); background: var(--sheet); max-width: 70ch; }
+  footer { border-top: 1px solid var(--rule); padding: 14px 0 32px; color: var(--muted); font-size: 13px; }
+  #report.htmx-request { opacity: .6; }
+  @media (prefers-reduced-motion: no-preference) { #report { transition: opacity .2s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">xeol-operator<small>End-of-life software in running images</small></div>
+    <!-- Refresh re-runs the report with the current filters; without htmx it reloads the page. -->
+    <form id="filters" method="get" action="" hx-get="ui/report" hx-target="#report" hx-indicator="#report"
+          hx-trigger="input delay:300ms, submit" hx-sync="this:replace">
+      <label>Namespace
+        <select name="namespace">
+          <option value="">All</option>
+          {{- range .Namespaces}}<option {{if eq . $.Namespace}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label>Kind
+        <select name="kind">
+          <option value="">All</option>
+          {{- range .Kinds}}<option {{if eq . $.Kind}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label>Filter rows
+        <input type="search" name="q" value="{{.Filter}}" placeholder="workload, product, image…" autocomplete="off">
+      </label>
+      <label>Upcoming window, days
+        <select name="within_days">
+          {{- range windows .WithinDays}}<option value="{{.Days}}" {{if eq .Days $.WithinDays}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </label>
+      <button class="refresh" type="submit">Refresh</button>
+    </form>
+  </header>
+  <main id="report" aria-live="polite">{{template "report" .}}</main>
+</div>
+</body>
+</html>
+
+{{define "report"}}
+{{- if not .Leader}}
+<p class="notice">This replica is on standby and holds no scan results. Reload to reach the leader, or port-forward the leader pod: <code>kubectl port-forward deploy/xeol-operator 8080</code>.</p>
+{{- else}}
+<p class="stamp">Updated <span>{{.Updated}}</span></p>
+{{- with .Status}}
+<h1 class="sr">EOL summary</h1>
+<div class="tiles">
+  <div class="tile {{if .WorkloadsEOL}}bad{{else}}good{{end}}"><h2 title="Workloads running software past end of life">Workloads past EOL</h2><b>{{.WorkloadsEOL}}</b></div>
+  <div class="tile {{if .WorkloadsEOLSoon}}warn{{else}}good{{end}}"><h2 title="Workloads with software reaching end of life within {{.WithinDays}} days">EOL within {{.WithinDays}} days</h2><b>{{.WorkloadsEOLSoon}}</b></div>
+  <div class="tile"><h2>Images scanned</h2>
+    <div class="split"><div><small>Scanned</small><b>{{.ImagesScanned}}</b></div><div><small>Tracked</small><b>{{.ImagesTracked}}</b></div></div></div>
+  <div class="tile {{nextTone .NextEOLDays .WithinDays}}"><h2>Next EOL in</h2>
+    {{- with .NextEOLDays}}{{$h := humanDays .}}<b>{{$h.N}}<span>{{$h.Unit}}</span></b>{{else}}<b><span>none</span></b>{{end}}</div>
+  <div class="tile {{ageTone .DBAgeSeconds}}"><h2>EOL database age</h2>
+    {{- with .DBAgeSeconds}}{{$h := humanAge .}}<b>{{$h.N}}<span>{{$h.Unit}}</span></b>{{else}}<b><span>not ready</span></b>{{end}}</div>
+  <div class="tile wide"><h2>Failed scans by reason</h2>
+    <div class="cells">{{range $.Failed}}
+      <div class="{{if .N}}bad{{else}}good{{end}}">
+        <span class="info" tabindex="0" aria-describedby="tip-{{.Reason}}">i</span>
+        <div class="tip" id="tip-{{.Reason}}" role="tooltip">
+          {{- if .N}}<p>{{.N}} {{plural .N "image" "images"}} failed with <strong>{{.Reason}}</strong>, in:</p><ul>{{range .Where}}<li>{{.}}</li>{{end}}</ul>
+          {{- else}}<p>No scans failed with <strong>{{.Reason}}</strong>.</p>{{end}}
+        </div>
+        <small>{{.Reason}}</small><b>{{.N}}</b>
+      </div>{{end}}
+    </div></div>
+</div>
+{{- end}}
+
+<div class="runway" role="group" aria-label="{{len .Marks}} product cycles: already end of life left of the today line, upcoming right of it. Pick one to filter the findings.">
+  <div class="today"></div>
+  {{- range .Marks}}
+  <button class="mark {{tone .DaysLeft}}{{if .On}} on{{end}}{{if .Dim}} dim{{end}}" type="submit" form="filters" name="pick" value="{{.Product}}	{{.Cycle}}" aria-pressed="{{.On}}" style="left: {{runway .DaysLeft $.WithinDays}}" title="{{.Product}} {{.Cycle}}: {{if .DaysLeft}}{{days .DaysLeft}} days{{else}}EOL, no date{{end}}, in {{join .Workloads ", "}}. Click to filter the findings by it, again to clear."></button>
+  {{- end}}
+</div>
+<div class="scale" aria-hidden="true"><span style="left:0">10 years ago</span><span style="left:8.4%">1 year</span><span style="left:17.4%">1 month</span><span class="t" style="left:30%">today</span><span style="left:65%">in {{half .WithinDays}} days</span><span style="left:100%">in {{.WithinDays}} days</span></div>
+
+<section>
+  <h2>Findings</h2>
+  <p class="note">Already end of life, or reaching it within {{.WithinDays}} days. Click a column name to sort; use its funnel to filter, or click a dot above. Days left is negative once past.</p>
+  <input type="hidden" name="sort" value="{{.Sort}}" form="filters">
+  <div class="table">
+    <table class="findings">
+      <thead>
+        <tr>
+          {{- range .Cols}}{{$c := .}}
+          <th class="{{if .Num}}num{{end}}" {{if .Arrow}}aria-sort="{{if eq .Arrow "▲"}}ascending{{else}}descending{{end}}"{{end}}>
+            <div class="th">
+              <button class="sort" type="submit" form="filters" name="sort" value="{{.Next}}" title="Sort by {{.Title}}">{{.Title}}<span aria-hidden="true">{{.Arrow}}</span></button>
+              <button class="funnel{{if .Active}} on{{end}}" type="button" popovertarget="pop-{{.Key}}" aria-label="Filter {{.Title}}" style="anchor-name: --f-{{.Key}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg></button>
+            </div>
+            <div id="pop-{{.Key}}" class="pop" popover style="position-anchor: --f-{{.Key}}">
+              <p class="pop-title">{{.Title}}</p>
+              <input type="search" name="f_{{.Key}}" value="{{.Filter}}" form="filters" placeholder="Contains…" aria-label="{{.Title}} contains" autocomplete="off">
+              <div class="vals">
+                {{- range .Values}}
+                <label><input type="checkbox" name="v_{{$c.Key}}" value="{{.Value}}" form="filters" {{if .Checked}}checked{{end}}> {{if .Value}}{{.Value}}{{else}}(empty){{end}}</label>
+                {{- end}}
+              </div>
+              <div class="acts">
+                <button class="clear" type="submit" form="filters" name="clear" value="{{.Key}}">Clear</button>
+                <button type="button" popovertarget="pop-{{.Key}}" popovertargetaction="hide">Cancel</button>
+                <button class="ok" type="submit" form="filters">OK</button>
+              </div>
+            </div>
+          </th>
+          {{- end}}
+        </tr>
+      </thead>
+      <tbody>
+      {{- range .Findings}}
+        <tr>
+          <td>{{.Namespace}}</td>
+          <td>{{.Kind}}</td>
+          <td>{{.Name}}</td>
+          <td>{{.Product}}</td>
+          <td>{{.Cycle}}</td>
+          <td>{{.EOL}}</td>
+          <td class="num days {{tone .DaysLeft}}">{{days .DaysLeft}}</td>
+          <td>{{.Image}}</td>
+          <td>{{.Package}}</td>
+          <td>{{.Version}}</td>
+          <td>{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">endoflife.date</a>{{end}}</td>
+          <td>{{.ScannedAt}}</td>
+        </tr>
+      {{- else}}
+        <tr><td colspan="{{len .Cols}}" class="empty">{{if or .Filter .ColFiltered}}No findings match these filters.{{else}}Nothing is past end of life or due within {{.WithinDays}} days. Widen the window to look further ahead.{{end}}</td></tr>
+      {{- end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="pair">
+  <section>
+    <h2>Workloads</h2>
+    <p class="note">Every scanned workload, worst first.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Workload</th><th class="num">Past EOL</th><th class="num">Due soon</th></tr></thead>
+        <tbody>
+        {{- range .Workloads}}
+          <tr><td class="wl">{{.Name}}<small>{{.Kind}} in {{.Namespace}}</small></td>
+            <td class="num">{{if .EOLNow}}<span class="pill eol">{{.EOLNow}}</span>{{else}}<span class="zero">0</span>{{end}}</td>
+            <td class="num">{{if .EOLSoon}}<span class="pill soon">{{.EOLSoon}}</span>{{else}}<span class="zero">0</span>{{end}}</td></tr>
+        {{- else}}
+          <tr><td colspan="3" class="empty">No workloads match these filters.</td></tr>
+        {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2>Namespaces</h2>
+    <p class="note">Workloads with end-of-life software, out of all scanned.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Namespace</th><th class="num">Affected</th><th class="num">Past EOL</th><th class="num">Due soon</th></tr></thead>
+        <tbody>
+        {{- range .ByNS}}
+          <tr><td>{{.Namespace}}</td><td class="num">{{.WorkloadsEOL}} / {{.Workloads}}</td>
+            <td class="num">{{if .EOLNow}}<span class="pill eol">{{.EOLNow}}</span>{{else}}<span class="zero">0</span>{{end}}</td>
+            <td class="num">{{if .EOLSoon}}<span class="pill soon">{{.EOLSoon}}</span>{{else}}<span class="zero">0</span>{{end}}</td></tr>
+        {{- else}}
+          <tr><td colspan="4" class="empty">No namespaces match these filters.</td></tr>
+        {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<footer>
+  {{- with .Status}}{{if .DBBuilt}}EOL data from endoflife.date, built {{.DBBuilt}} ({{hours .DBAgeSeconds}} hours ago).{{else}}The EOL database is not ready yet.{{end}}{{end}}
+  Current state only; Refresh to update.
+</footer>
+{{- end}}
+{{end}}

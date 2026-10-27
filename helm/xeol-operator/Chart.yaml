@@ -1,0 +1,9 @@
+apiVersion: v2
+name: xeol-operator
+description: Scan running container images for end-of-life software with xeol and export the findings to Prometheus and Grafana.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [eol, end-of-life, xeol, prometheus, grafana, security]
+home: https://github.com/Rishang/xeol-operator
+sources: [https://github.com/Rishang/xeol-operator]

@@ -1,0 +1,136 @@
+{{- if not (has .Values.db.source (list "online" "mounted")) }}
+{{- fail "db.source must be online or mounted" }}
+{{- end }}
+{{- $mounted := eq .Values.db.source "mounted" }}
+{{- $dbInit := and $mounted .Values.db.mounted.initContainer.image }}
+{{- if and $mounted (not $dbInit) (not .Values.db.mounted.volume) }}
+{{- fail "db.source=mounted needs db.mounted.volume or db.mounted.initContainer.image" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "xeol-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "xeol-operator.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "xeol-operator.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $dbInit }}
+      initContainers:
+        - name: copy-db
+          image: {{ .Values.db.mounted.initContainer.image }}
+          command: {{- toYaml .Values.db.mounted.initContainer.command | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: xeol-db
+              mountPath: /xeol-db
+      {{- end }}
+      containers:
+        - name: manager
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:{{ .Values.metrics.port }}
+            - --metrics-secure=false
+            - --scan-workers={{ .Values.scanner.workers }}
+            - --scan-timeout={{ .Values.scanner.timeout }}
+            - --db-source={{ .Values.db.source }}
+            - --db-dir={{ include "xeol-operator.dbDir" . }}
+            - --eol-url={{ .Values.db.url }}
+            - --xeol-bin=/usr/local/bin/xeol
+            - --syft-bin=/usr/local/bin/syft
+            - --state-dir=/var/lib/xeol-operator
+            - --scan-memory-limit={{ .Values.scanner.goMemLimit }}
+            - --scan-max-procs={{ .Values.scanner.maxProcs }}
+            {{- if .Values.ui.enabled }}
+            - --ui
+            {{- end }}
+            {{- if .Values.mcp.enabled }}
+            - --mcp
+            {{- end }}
+          env:
+            - name: TMPDIR
+              value: /tmp
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet: {path: /healthz, port: probes}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            # Ready once the EOL database is valid (online mode: first build from endoflife.date).
+            httpGet: {path: /readyz, port: probes}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: xeol-db
+              mountPath: {{ include "xeol-operator.dbDir" . }}
+              readOnly: {{ and $mounted (not $dbInit) }}
+            - name: tmp
+              mountPath: /tmp
+            - name: state
+              mountPath: /var/lib/xeol-operator
+      volumes:
+        # Survives container restarts: saved scan results (results.db) and in-flight markers that
+        # reveal a scan that OOM-killed the pod.
+        - name: state
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- if and $mounted (not $dbInit) }}
+        - name: xeol-db
+          {{- toYaml .Values.db.mounted.volume | nindent 10 }}
+        {{- else }}
+        - name: xeol-db
+          emptyDir:
+            sizeLimit: 512Mi
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.scanTmp.sizeLimit }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

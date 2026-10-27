@@ -1,0 +1,70 @@
+# Keep in sync with config/rbac/role.yaml (generated from +kubebuilder:rbac markers).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, nodes, pods, serviceaccounts]
+    verbs: [get, list, watch]
+  # Only pull secrets referenced by Pods are read, one get per scan, never cached or listed.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [daemonsets, deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list, watch]
+  - apiGroups: [xeol.io]
+    resources: [xeolscanners]
+    verbs: [get, list, watch]
+  - apiGroups: [xeol.io]
+    resources: [xeolscanners/status]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "xeol-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "xeol-operator.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Leader election.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "xeol-operator.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "xeol-operator.fullname" . }}
+    namespace: {{ .Release.Namespace }}

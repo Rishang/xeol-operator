@@ -1,0 +1,25 @@
+apiVersion: xeol.io/v1alpha1
+kind: XeolScanner
+metadata:
+  name: default
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.scanner.namespaceSelector }}
+  namespaceSelector: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.scanner.excludeNamespaces }}
+  excludeNamespaces: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.scanner.excludeImages }}
+  excludeImages: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  interval: {{ .Values.scanner.interval | quote }}
+  {{- with .Values.scanner.workloadKinds }}
+  workloadKinds: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.scanner.workloadLabels }}
+  workloadLabels: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.scanner.ignoreProducts }}
+  ignoreProducts: {{- toYaml . | nindent 4 }}
+  {{- end }}

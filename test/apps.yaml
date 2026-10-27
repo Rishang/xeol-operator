@@ -1,0 +1,51 @@
+# Test workloads with known end-of-life software, for local/e2e checks of xeol-operator.
+#   kubectl --context k3d-k3s-default apply -f test/apps.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: node16, namespace: test, labels: {team: web}}
+spec:
+  selector: {matchLabels: {app: node16}}
+  template:
+    metadata: {labels: {app: node16}}
+    spec: {containers: [{name: app, image: "node:16-alpine", command: [sleep, infinity]}]}    # Node 16 + Alpine 3.18: EOL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: node22, namespace: test, labels: {team: web}}
+spec:
+  selector: {matchLabels: {app: node22}}
+  template:
+    metadata: {labels: {app: node22}}
+    spec: {containers: [{name: app, image: "node:22-alpine", command: [sleep, infinity]}]}    # Node 22: EOL 2027-04-30 (upcoming)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: python38, namespace: test, labels: {team: payments}}
+spec:
+  selector: {matchLabels: {app: python38}}
+  template:
+    metadata: {labels: {app: python38}}
+    spec: {containers: [{name: app, image: "python:3.8-slim", command: [sleep, infinity]}]}   # Python 3.8: EOL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: python312, namespace: test, labels: {team: payments}}
+spec:
+  selector: {matchLabels: {app: python312}}
+  template:
+    metadata: {labels: {app: python312}}
+    spec: {containers: [{name: app, image: "python:3.12-slim", command: [sleep, infinity]}]} # Python 3.12: EOL 2028-10-31
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: python38-agent, namespace: test, labels: {team: platform}}
+spec:
+  selector: {matchLabels: {app: python38-agent}}
+  template:
+    metadata: {labels: {app: python38-agent}}
+    spec: {containers: [{name: app, image: "python:3.8-slim", command: [sleep, infinity]}]}  # same digest as python38: scanned once

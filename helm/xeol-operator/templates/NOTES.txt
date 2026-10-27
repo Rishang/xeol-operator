@@ -1,0 +1,15 @@
+xeol-operator is installed in {{ .Release.Namespace }}.
+
+Status:      kubectl get xeolscanner default
+Metrics:     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "xeol-operator.fullname" . }}-metrics {{ .Values.metrics.port }} && curl -s localhost:{{ .Values.metrics.port }}/metrics | grep ^xeol_
+{{- if .Values.ui.enabled }}
+UI:          kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "xeol-operator.fullname" . }} {{ .Values.metrics.port }}, then open http://localhost:{{ .Values.metrics.port }}/
+{{- end }}
+{{- if .Values.mcp.enabled }}
+MCP:         same port-forward, then: claude mcp add --transport http xeol http://localhost:{{ .Values.metrics.port }}/mcp
+{{- end }}
+EOL source:  {{ if eq .Values.db.source "online" }}built daily from endoflife.date{{ else }}mounted at {{ .Values.db.mounted.path }}{{ end }}
+{{- if not .Values.serviceMonitor.enabled }}
+
+Enable serviceMonitor.enabled (and prometheusRule.enabled, grafanaDatasource.enabled for the dashboard) to wire up Prometheus and Grafana.
+{{- end }}
