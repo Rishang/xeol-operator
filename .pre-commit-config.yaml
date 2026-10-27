@@ -1,0 +1,36 @@
+# pre-commit install   (or: prek install)
+exclude: ^(.*/testdata/|openspec/changes/archive/)
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+      - id: check-json
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^helm/xeol-operator/templates/   # Go templates, not YAML
+
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: task lint
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: chart-crds
+        name: chart CRDs match generated ones
+        entry: task chart-check
+        language: system
+        files: ^(api/|config/crd/|helm/xeol-operator/crds/)
+        pass_filenames: false
+      - id: chart-test
+        name: helm lint and render
+        entry: task chart-test
+        language: system
+        files: ^helm/
+        pass_filenames: false

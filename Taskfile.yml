@@ -65,7 +65,7 @@ tasks:
       - kubectl --context kind-{{.KIND_CLUSTER}} delete --ignore-not-found -k config/default
 
   lint:
-    desc: golangci-lint (custom build with the logcheck plugin)
+    desc: golangci-lint
     deps: [tools]
     cmds:
       - '{{.GOLANGCI_LINT}} config verify'
@@ -80,13 +80,7 @@ tasks:
       - task: go-install
         vars: {NAME: setup-envtest, BIN: '{{.ENVTEST}}', PKG: sigs.k8s.io/controller-runtime/tools/setup-envtest, VER: '{{.ENVTEST_VERSION}}'}
       - task: go-install
-        vars: {NAME: golangci-lint, BIN: '{{.GOLANGCI_LINT}}-base', PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint, VER: '{{.GOLANGCI_LINT_VERSION}}'}
-      - cmd: |
-          [ -f {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom ] || {
-            {{.GOLANGCI_LINT}}-base custom --destination {{.LOCALBIN}} --name golangci-lint-custom
-            mv -f {{.LOCALBIN}}/golangci-lint-custom {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom
-          }
-          ln -sf {{.GOLANGCI_LINT}}-{{.GOLANGCI_LINT_VERSION}}.custom {{.GOLANGCI_LINT}}
+        vars: {NAME: golangci-lint, BIN: '{{.GOLANGCI_LINT}}', PKG: github.com/golangci/golangci-lint/v2/cmd/golangci-lint, VER: '{{.GOLANGCI_LINT_VERSION}}'}
 
   go-install:
     internal: true

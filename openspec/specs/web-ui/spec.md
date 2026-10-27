@@ -31,4 +31,3 @@ On a non-leader replica, the UI SHALL render a standby notice (HTTP 200, so htmx
 #### Scenario: Hostile values
 - **WHEN** an image reference contains `<script>` or a finding URL is `javascript:`
 - **THEN** both render inert
-

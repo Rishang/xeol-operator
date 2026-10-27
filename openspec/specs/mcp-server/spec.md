@@ -27,4 +27,3 @@ The MCP tools SHALL NOT change any state. A non-leader replica SHALL answer `/mc
 #### Scenario: Standby replica
 - **WHEN** a client calls `/mcp` on a non-leader replica
 - **THEN** it gets HTTP 503
-

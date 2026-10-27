@@ -56,4 +56,3 @@ The operator SHALL track a Pod only when its top-level workload kind is in `spec
 #### Scenario: Every kind
 - **WHEN** `workloadKinds: []`
 - **THEN** Pods of any top-level kind, bare Pods included, are tracked
-
