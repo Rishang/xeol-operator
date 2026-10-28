@@ -39,3 +39,30 @@ Each digest's last scan SHALL be saved to SQLite at `<state-dir>/results.db`. Af
 #### Scenario: Restart mid-interval
 - **WHEN** the container restarts 2h after a digest was scanned with a 24h interval
 - **THEN** its findings are restored and it is not rescanned
+
+## Data model
+
+`<state-dir>/results.db` (`/var/lib/xeol-operator/results.db` in the chart) holds one row per image digest. `findings` is a JSON array; its elements are shown as `FINDING` below but are not a separate table. Rows are deleted once `next_at` is more than a week in the past (`internal/results/results.go`).
+
+```mermaid
+erDiagram
+    RESULTS ||--o{ FINDING : "findings (JSON array)"
+    RESULTS {
+        TEXT digest PK "sha256:..."
+        INTEGER scanned_at "Unix seconds of the last scan"
+        INTEGER next_at "Unix seconds of the next scan; indexed (results_next_at)"
+        TEXT err_reason "'' on success, else auth, not_found, timeout, oom, other"
+        TEXT findings "JSON array of FINDING, kept from the previous scan on failure"
+    }
+    FINDING {
+        string Product "endoflife.date product, e.g. Python"
+        string Cycle "release cycle, e.g. 3.8"
+        string EOL "RFC 3339 date; 1970-01-01 when EOL without a date"
+        string Package "package name from the SBOM"
+        string Version "package version"
+        string Type "package type, e.g. python, deb"
+        string PURL "package URL"
+        string Distro "image distro, e.g. debian 12"
+        string URL "endoflife.date page"
+    }
+```

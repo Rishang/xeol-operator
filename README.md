@@ -128,6 +128,7 @@ Join `xeol_image_workload` on `digest` to get workloads (the dashboard's main ta
 | [Helm](docs/helm.md) | Every chart value, upgrade, uninstall |
 | [CRD](docs/crd.md) | `XeolScanner` fields, globs, status, conditions |
 | [Air-gapped](docs/air-gapped.md) | Clusters without internet access |
+| [Architecture](docs/architecture.md) | Components, scan flow, where data is stored, failure handling |
 
 ## Development
 

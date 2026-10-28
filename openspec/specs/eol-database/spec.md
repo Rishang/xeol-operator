@@ -29,3 +29,53 @@ xeol's own age check SHALL be disabled (`XEOL_DB_VALIDATE_AGE=false`); the build
 #### Scenario: Old mounted DB
 - **WHEN** a mounted DB is 40 days old
 - **THEN** scans still run and the stale-DB alert fires
+
+## Data model
+
+`<db-dir>/1/xeol.db` (`/var/cache/xeol/1/xeol.db` in the chart), with its build time in `<db-dir>/1/metadata.json`. The schema is xeol's; the operator fills it from endoflife.date (`internal/eoldb/build.go`). The `product_id` columns are not declared as foreign keys in SQLite; the relations below are how xeol joins them. `vulns` is created for xeol's schema and left empty.
+
+```mermaid
+erDiagram
+    PRODUCTS ||--o{ CYCLES : "product_id"
+    PRODUCTS ||--o{ PURLS : "product_id"
+    PRODUCTS ||--o{ CPES : "product_id"
+    PRODUCTS ||--o{ VULNS : "product_id"
+    PRODUCTS {
+        integer id PK
+        TEXT name "display name, e.g. Python"
+        TEXT permalink "e.g. https://endoflife.date/python"
+    }
+    CYCLES {
+        integer id PK
+        integer product_id FK
+        TEXT release_cycle "e.g. 3.8"
+        date eol "EOL date; NULL when only eol_bool is known"
+        boolean eol_bool "EOL without a date"
+        boolean lts
+        TEXT latest_release
+        date latest_release_date
+        date release_date
+        boolean support
+    }
+    PURLS {
+        integer id PK
+        integer product_id FK
+        TEXT purl "e.g. pkg:pypi/django; indexed with product_id"
+    }
+    CPES {
+        integer id PK
+        integer product_id FK
+        TEXT cpe "matches distros and OS packages"
+    }
+    VULNS {
+        integer id PK
+        integer product_id FK
+        TEXT version
+        integer issue_count
+        TEXT issues
+    }
+    ID {
+        TEXT build_timestamp "RFC 3339"
+        INTEGER schema_version "1"
+    }
+```
