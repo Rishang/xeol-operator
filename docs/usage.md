@@ -69,7 +69,7 @@ default   42       7     3m         True
 Follow progress in the logs:
 
 ```bash
-kubectl -n xeol-system logs deploy/xeol-operator -f | grep -E 'scanned|scan failed'
+kubectl -n xeol-system logs deploy/xeol-operator -f | grep -E 'scanned|scan failed'   # one line per image
 ```
 
 ## 3. Read the results
@@ -80,6 +80,8 @@ Every view shows the same data: each running workload, the EOL products found in
 
 With `grafanaDatasource.enabled`, open the **xeol: end-of-life software** dashboard. It has headline numbers, an "EOL products per workload" table (red: past EOL, yellow: due within 6 months), and the full findings list. Use the variables at the top to narrow by namespace and kind, or change the "Upcoming window".
 
+![Grafana dashboard](../.github/images/grafana-dashboard.png)
+
 ### Built-in web page
 
 With `ui.enabled`:
@@ -88,7 +90,11 @@ With `ui.enabled`:
 kubectl -n xeol-system port-forward deploy/xeol-operator 8080
 ```
 
-Open <http://localhost:8080/>. The page shows:
+Open <http://localhost:8080/>.
+
+![Built-in web page](../.github/images/web-ui.png)
+
+The page shows:
 
 - **Tiles**: workloads past EOL, workloads due soon, days to the next EOL date, age of the EOL database, and failed scans by reason. Hover the ⓘ on a failure reason to see which workloads are affected.
 - **Timeline**: one dot per product release, placed by EOL date. Dots left of the "today" line are already past EOL. Click a dot to filter the findings table to that release; click it again to clear.

@@ -94,7 +94,7 @@ The operator always scans and always serves `/metrics` and the JSON API (`/api/v
 | `XeolEOLSoftwareSoon` | Software reaches EOL within `prometheusRule.eolSoonDays` (90), for 1 hour. | info |
 | `XeolDatabaseStale` | The EOL database is older than `prometheusRule.dbStaleDays` (30). | warning |
 | `XeolDatabaseMissing` | No EOL database for 30 minutes, so nothing is scanned. | warning |
-| `XeolScanErrors` | More than 5 scans failed with one reason in the last hour. | info |
+| `XeolScanErrors` | More than 5 scans failed with one reason in the last hour, for 15 minutes. | info |
 
 The last three tell you the operator itself is unhealthy, which an empty dashboard can't: no findings could mean "all good" or "scanning stopped".
 
@@ -107,6 +107,8 @@ Alerts fire per image and product, not per workload. To route by team, set `scan
 ### Grafana dashboard: `grafanaDatasource.enabled`
 
 **Use it to** get a ready-made Grafana dashboard: headline stats, EOL by namespace and workload, a per-workload product table (red past EOL, yellow within 6 months) and the full findings list, filterable by namespace, kind and an upcoming window.
+
+![Grafana dashboard](../.github/images/grafana-dashboard.png)
 
 **Creates** two ConfigMaps in the operator's namespace:
 
@@ -129,6 +131,8 @@ Alerts fire per image and product, not per workload. To route by team, set `scan
 ### Built-in web page: `ui.enabled`
 
 **Use it** in clusters without Grafana, or for a quick look without setting up dashboards.
+
+![Built-in web page](../.github/images/web-ui.png)
 
 **Serves** a page at `/` on port 8080:
 
@@ -278,5 +282,3 @@ A new pod starts with an empty state volume and rescans everything.
 helm uninstall xeol-operator -n xeol-system
 kubectl delete crd xeolscanners.xeol.io   # Helm leaves CRDs behind
 ```
-
-Private registries need no extra setup: each scan uses the Pod's `imagePullSecrets` and its ServiceAccount's.
