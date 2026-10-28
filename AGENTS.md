@@ -174,7 +174,7 @@ Taskfile.yml
 - The kubeconfig also holds production contexts (EKS, AKS). Always pass `--context k3d-k3s-default` / `--kube-context k3d-k3s-default` explicitly on every `kubectl` and `helm` command. Never rely on the current context, and never run against any other context.
 - Load locally built images with `k3d image import <image> -c k3s-default` instead of pushing to a registry.
 - kube-prometheus-stack (namespace `monitoring`, release `kube-prom-stack`) picks up ServiceMonitors, PrometheusRules and dashboard ConfigMaps from any namespace.
-- Deploy the operator with `task deploy-dev -- --set serviceMonitor.enabled=true,prometheusRule.enabled=true,grafanaDatasource.enabled=true,ui.enabled=true,mcp.enabled=true`. Test workloads with known-EOL images live in namespace `test` (`kubectl --context k3d-k3s-default apply -f test/apps.yaml`).
+- Fresh setup: `task cluster-up` (k3d cluster, kube-prometheus-stack, EOL test apps in namespace `test`, operator). Redeploy the operator with `task deploy-dev -- -f test/dev-values.yaml`.
 - Images loaded with `k3d image import` have no registry digest (`imageID: sha256:...`), so the operator skips them; that includes the operator itself.
 
 ## Git

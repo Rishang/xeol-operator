@@ -22,7 +22,7 @@ Always pass `--context k3d-k3s-default` / `--kube-context k3d-k3s-default`; the 
 | Deployment/python312 | python:3.12-slim | 0 | 2 |
 
 `monitoring` adds EOL-soon findings only (grafana 3, kube-state-metrics 1, node-exporter 1).
-`kubectl get xeolscanner default` showed IMAGES 9, EOL 3, Ready True.
+`kubectl --context k3d-k3s-default get xeolscanner default` showed IMAGES 9, EOL 3, Ready True.
 ("soon" = within 10 years here, from `/api/v1/workloads?within_days=3650`.)
 
 ## Grafana
@@ -34,33 +34,15 @@ Always pass `--context k3d-k3s-default` / `--kube-context k3d-k3s-default`; the 
 ## Rebuild on a fresh cluster
 
 ```bash
-k3d cluster create k3s-default            # keep traefik: Grafana's ingress uses it
-NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' k3d-k3s-default-server-0)
-
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm upgrade --install kube-prom-stack prometheus-community/kube-prometheus-stack --version 92.13.1 \
-  --kube-context k3d-k3s-default -n monitoring --create-namespace -f - <<EOF
-grafana:
-  adminPassword: prom-operator
-  ingress: {enabled: true, ingressClassName: traefik, path: /, hosts: [grafana.$NODE_IP.nip.io]}
-  plugins: [yesoreyeram-infinity-datasource]
-  sidecar:
-    dashboards: {searchNamespace: ALL}
-    datasources: {searchNamespace: ALL}
-prometheus:
-  prometheusSpec:
-    podMonitorSelectorNilUsesHelmValues: false
-    ruleSelectorNilUsesHelmValues: false
-    serviceMonitorSelectorNilUsesHelmValues: false
-EOF
-
-kubectl --context k3d-k3s-default apply -f test/apps.yaml
-task deploy-dev -- --set serviceMonitor.enabled=true,prometheusRule.enabled=true,grafanaDatasource.enabled=true,ui.enabled=true,mcp.enabled=true
-
-# accepted findings, set on the CR directly (not in the Helm values)
-kubectl --context k3d-k3s-default patch xeolscanner default --type merge -p \
-  '{"spec":{"ignoreProducts":[{"products":["Gorilla Toolkit"],"namespaces":["monitoring"]},{"products":["perl"],"namespaces":["test"]}]}}'
+task cluster-up      # idempotent: creates k3d-k3s-default if missing, then installs everything below
 ```
+
+1. k3d cluster `k3s-default` (traefik kept: Grafana's ingress uses it; current context is not switched).
+2. kube-prometheus-stack 92.13.1 in `monitoring` with `test/kube-prom-stack.values.yaml` (Infinity plugin, sidecars on all namespaces, selectors open); ingress host `grafana.<node-ip>.nip.io`.
+3. `test/apps.yaml`: the EOL workloads in `test`.
+4. `task deploy-dev -- -f test/dev-values.yaml`: operator with ServiceMonitor, PrometheusRule, Grafana datasource, UI, MCP, and the ignore rules (Gorilla Toolkit in `monitoring`, perl in `test`).
+
+Redeploy only the operator after a code change: `task deploy-dev -- -f test/dev-values.yaml`.
 
 Operator UI/API/MCP: `kubectl --context k3d-k3s-default -n xeol-system port-forward deploy/xeol-operator 8080`, then http://localhost:8080/.
 Images loaded with `k3d image import` have no registry digest, so the operator itself is never scanned.

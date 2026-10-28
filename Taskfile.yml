@@ -103,6 +103,19 @@ tasks:
     desc: Build the operator image
     cmds: ['docker build -t {{.IMG}} .']
 
+  cluster-up:
+    desc: 'Local k3d test cluster from scratch (idempotent): kube-prometheus-stack, EOL test apps, operator'
+    cmds:
+      - k3d cluster list {{.K3D_CLUSTER}} >/dev/null 2>&1 || k3d cluster create {{.K3D_CLUSTER}} --kubeconfig-switch-context=false --wait
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+      - >-
+        helm upgrade --install kube-prom-stack prometheus-community/kube-prometheus-stack --version 92.13.1
+        --kube-context {{.KUBE_CONTEXT}} -n monitoring --create-namespace -f test/kube-prom-stack.values.yaml
+        --set "grafana.ingress.hosts[0]=grafana.$(docker inspect -f '{{"{{"}}range .NetworkSettings.Networks{{"}}"}}{{"{{"}}.IPAddress{{"}}"}}{{"{{"}}end{{"}}"}}' k3d-{{.K3D_CLUSTER}}-server-0).nip.io"
+      - kubectl --context {{.KUBE_CONTEXT}} apply -f test/apps.yaml
+      - task: deploy-dev
+        vars: {CLI_ARGS: -f test/dev-values.yaml}
+
   deploy-dev:
     desc: Build the image, load it into k3d and install with Helm
     deps: [docker-build]

@@ -1,0 +1,12 @@
+# xeol-operator values for the local k3d cluster: task deploy-dev -- -f test/dev-values.yaml
+serviceMonitor: {enabled: true}
+prometheusRule: {enabled: true}
+grafanaDatasource: {enabled: true}
+ui: {enabled: true}
+mcp: {enabled: true}
+scanner:
+  ignoreProducts:
+    - products: [Gorilla Toolkit]
+      namespaces: [monitoring]
+    - products: [perl]
+      namespaces: [test]

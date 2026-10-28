@@ -1,0 +1,17 @@
+# kube-prometheus-stack for the local k3d cluster (task cluster-up). The Grafana ingress host is set there
+# from the node IP: grafana.<node-ip>.nip.io
+grafana:
+  adminPassword: prom-operator            # local throwaway cluster only
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    path: /
+  plugins: [yesoreyeram-infinity-datasource]
+  sidecar:
+    dashboards: {searchNamespace: ALL}
+    datasources: {searchNamespace: ALL}
+prometheus:
+  prometheusSpec:
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
