@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**']
+    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**']
   pull_request:
-    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**']
+    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**']
   workflow_dispatch:
 
 concurrency:
