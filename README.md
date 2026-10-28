@@ -143,4 +143,4 @@ Design and conventions: [AGENTS.md](AGENTS.md). Specs: [openspec/specs/](openspe
 
 ## License
 
-Apache 2.0.
+[Apache 2.0](LICENSE).
