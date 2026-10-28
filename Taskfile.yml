@@ -5,7 +5,7 @@ vars:
   # Never rely on the current kube context; prod contexts share this kubeconfig.
   KUBE_CONTEXT: '{{.KUBE_CONTEXT | default "k3d-k3s-default"}}'
   K3D_CLUSTER: '{{.K3D_CLUSTER | default "k3s-default"}}'
-  KIND_CLUSTER: '{{.KIND_CLUSTER | default "xeol-operator-test-e2e"}}'
+  E2E_CLUSTER: '{{.E2E_CLUSTER | default "xeol-e2e"}}'
   CHART: helm/xeol-operator
   NS: xeol-system
   LOCALBIN: '{{.ROOT_DIR}}/bin'
@@ -42,27 +42,27 @@ tasks:
     desc: Unit and envtest tests
     deps: [check]
     cmds:
-      - KUBEBUILDER_ASSETS="$({{.ENVTEST}} use {{.ENVTEST_K8S_VERSION}} --bin-dir {{.LOCALBIN}} -p path)" go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+      - KUBEBUILDER_ASSETS="$({{.ENVTEST}} use {{.ENVTEST_K8S_VERSION}} --bin-dir {{.LOCALBIN}} -p path)" go test ./... -coverprofile cover.out
 
   test-e2e:
-    desc: e2e tests in a throwaway Kind cluster (kind-{{.KIND_CLUSTER}})
-    deps: [check]
+    desc: 'Smoke test in a throwaway k3d cluster: the Helm chart installs under restricted PSA and the pod turns Ready (EOL DB built)'
+    deps: [docker-build]
+    vars:
+      # own kubeconfig: never touches ~/.kube/config or its current context
+      KUBECONFIG: '{{.LOCALBIN}}/e2e.kubeconfig'
+      CTX: k3d-{{.E2E_CLUSTER}}
     cmds:
-      - kind get clusters | grep -qx {{.KIND_CLUSTER}} || kind create cluster --name {{.KIND_CLUSTER}}
-      - defer: kind delete cluster --name {{.KIND_CLUSTER}}
-      - KIND_CLUSTER={{.KIND_CLUSTER}} go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-
-  e2e-deploy:
-    desc: Install CRDs and the kustomize deployment into the e2e Kind cluster
-    deps: [manifests]
-    cmds:
-      - kubectl --context kind-{{.KIND_CLUSTER}} apply --server-side -k config/default
-      - kubectl --context kind-{{.KIND_CLUSTER}} -n xeol-operator-system set image deployment/xeol-operator-controller-manager manager={{.IMG}}
-
-  e2e-undeploy:
-    desc: Remove the kustomize deployment and CRDs from the e2e Kind cluster
-    cmds:
-      - kubectl --context kind-{{.KIND_CLUSTER}} delete --ignore-not-found -k config/default
+      - k3d cluster create {{.E2E_CLUSTER}} --no-lb --k3s-arg '--disable=traefik@server:0' --kubeconfig-update-default=false --wait
+      - defer: k3d cluster delete {{.E2E_CLUSTER}}
+      - k3d kubeconfig get {{.E2E_CLUSTER}} > {{.KUBECONFIG}}
+      - k3d image import {{.IMG}} -c {{.E2E_CLUSTER}}
+      - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} create ns {{.NS}}
+      - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} label ns {{.NS}} pod-security.kubernetes.io/enforce=restricted
+      - >-
+        helm install xeol-operator {{.CHART}} --kubeconfig {{.KUBECONFIG}} --kube-context {{.CTX}} -n {{.NS}} --wait --timeout 5m
+        --set image.repository={{splitList ":" .IMG | first}} --set image.tag={{splitList ":" .IMG | last}}
+        || { kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} -n {{.NS}} get events;
+        kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} -n {{.NS}} logs deploy/xeol-operator --tail=50; exit 1; }
 
   lint:
     desc: golangci-lint

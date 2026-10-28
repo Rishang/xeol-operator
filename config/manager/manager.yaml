@@ -91,12 +91,24 @@ spec:
         # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         resources:
           limits:
-            cpu: 500m
-            memory: 128Mi
+            memory: 1Gi
           requests:
-            cpu: 10m
-            memory: 64Mi
-        volumeMounts: []
-      volumes: []
+            cpu: 100m
+            memory: 256Mi
+        # writable dirs on the read-only root filesystem; same as the Helm chart
+        volumeMounts:
+        - name: xeol-db
+          mountPath: /var/cache/xeol
+        - name: tmp
+          mountPath: /tmp
+        - name: state
+          mountPath: /var/lib/xeol-operator
+      volumes:
+      - name: xeol-db
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      - name: state
+        emptyDir: {}
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

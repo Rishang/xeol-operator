@@ -142,7 +142,7 @@ Changes go through [OpenSpec](https://github.com/Fission-AI/OpenSpec): `/opsx:pr
 
 ## Local context
 
-`.local/` is gitignored. If `.local/context/*.md` exists, read every file there before starting work; it holds local notes and references (e.g. trivy-operator as a design reference).
+`.local/` is gitignored. If `.local/context/*.md` exists, read every file there before starting work; it holds local notes and references (e.g. trivy-operator as a design reference). Shared context (e.g. the local k3d test cluster) is indexed in `.claude/context/index.md`.
 
 ## Conventions
 
@@ -151,7 +151,7 @@ Changes go through [OpenSpec](https://github.com/Fission-AI/OpenSpec): `/opsx:pr
 - Private registries: reuse the Pod's `imagePullSecrets`. Never log credentials.
 - Run as non-root, read-only root filesystem; xeol's DB cache goes on an `emptyDir` (or PVC if configured).
 - RBAC: read-only, nothing more: Pods, namespaces, nodes (platform), ServiceAccounts and Secrets (pull secrets), workload kinds (owner walk), plus the CRD.
-- Tests: envtest for the controller, a fixture-based test for the xeol JSON parser. e2e (`task test-e2e`) runs in Kind without cert-manager: the operator has no webhooks. Keep the parser test fed with real xeol output saved under `testdata/`.
+- Tests: envtest for the controller, a fixture-based test for the xeol JSON parser. e2e (`task test-e2e`) is a smoke test: Helm install into k3d (no traefik) under restricted PSA, wait for Ready. Keep the parser test fed with real xeol output saved under `testdata/`.
 
 ## Layout
 

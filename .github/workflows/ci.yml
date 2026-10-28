@@ -36,22 +36,16 @@ jobs:
       - name: Generated code, CRDs and go.mod are committed
         run: go mod tidy && git diff --exit-code
 
-  # Kind + image build is the slow part: only on main and on demand, not on every PR.
+  # k3d + image build is the slow part: only on main and on demand, not on every PR.
   e2e:
     needs: check
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: go-task/setup-task@v2
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: actions/cache@v6
-        with:
-          path: bin
-          key: bin-${{ hashFiles('Taskfile.yml', 'go.sum') }}
-      - run: task test-e2e   # kind is preinstalled on ubuntu-latest
+      - run: sudo curl -sSfL -o /usr/local/bin/k3d https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64 && sudo chmod +x /usr/local/bin/k3d
+      - run: task test-e2e   # helm and kubectl are preinstalled on ubuntu-latest

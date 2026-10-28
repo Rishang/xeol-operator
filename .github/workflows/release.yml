@@ -1,0 +1,42 @@
+name: Release
+
+# Publishing a GitHub release pushes docker.io/rishang/xeol-operator:<tag>.
+# Tag v0.1.0 also pushes :0.1.0, the form the chart's image.tag defaults to (appVersion).
+# Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE: docker.io/rishang/xeol-operator
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Image tags
+        id: tags
+        run: |
+          tags="$IMAGE:$TAG"
+          [ "${TAG#v}" != "$TAG" ] && tags="$tags,$IMAGE:${TAG#v}"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      # ponytail: linux/amd64 only; add setup-qemu-action and platforms when arm64 nodes need it
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
