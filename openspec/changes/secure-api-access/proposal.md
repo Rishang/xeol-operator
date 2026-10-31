@@ -30,5 +30,5 @@ Options, cheapest first; pick when this is taken up:
 
 ## Impact
 
-- Option 1: chart only (`templates/networkpolicy.yaml`, values, `docs/helm.md`).
+- Option 1: chart only (`templates/networkpolicy.yaml`, values, `ui/src/content/docs/helm.mdx`).
 - Options 2-3: `cmd/main.go` (secure serving), `internal/api`, RBAC (`tokenreviews`, `subjectaccessreviews` create: beyond today's read-only RBAC), ServiceMonitor (bearer token, TLS), Grafana datasource (token), docs. Breaking for existing Grafana/Prometheus setups.

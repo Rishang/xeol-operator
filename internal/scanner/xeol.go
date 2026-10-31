@@ -68,7 +68,18 @@ const (
 	// ReasonOOM: scanning this image killed the pod last time; it is backed off instead of crash-looping.
 	ReasonOOM   = "oom"
 	ReasonOther = "other"
+	// ReasonTrivy: the vulnerability step failed; the EOL findings of the same scan are kept.
+	ReasonTrivy = "trivy"
 )
+
+// Result is one image scan. A nil slice means that step did not run or failed, so the
+// previous rows are kept; a non-nil (possibly empty) slice replaces them.
+type Result struct {
+	Findings []Finding
+	Vulns    []Vuln
+	// VulnErr is a failure of the trivy step alone (reason ReasonTrivy).
+	VulnErr error
+}
 
 // ScanError is a failed scan with a classified reason.
 type ScanError struct {
@@ -78,12 +89,13 @@ type ScanError struct {
 
 func (e *ScanError) Error() string { return fmt.Sprintf("scan failed (%s): %s", e.Reason, e.Msg) }
 
-// Xeol scans an image in two steps: syft catalogs it into an SBOM, then xeol matches the SBOM
-// against the EOL DB. Current syft needs well under half the memory of the syft built into
-// xeol v0.10.8 (grafana: 0.7 vs 1.6 GB, same findings), and the xeol step is ~70 MB.
-type Xeol struct {
-	// Bin is the xeol binary path.
-	Bin string
+// Runner scans one image: syft catalogs it into an SBOM once, then xeol matches it against the EOL
+// DB (syft-json) and/or trivy against the vulnerability DB (CycloneDX; trivy can't read
+// syft-json). Current syft needs well under half the memory of the syft built into xeol v0.10.8
+// (grafana: 0.7 vs 1.6 GB, same findings); the xeol step is ~70 MB and the trivy step ~150 MB.
+type Runner struct {
+	// XeolBin is the xeol binary path.
+	XeolBin string
 	// Syft is the syft binary path.
 	Syft string
 	// DBDir is the xeol DB cache dir, holding 1/xeol.db.
@@ -103,6 +115,12 @@ type Xeol struct {
 	OOMBackoff time.Duration
 	// Solo is true when scans never overlap (one worker), so a leftover marker always names the culprit.
 	Solo bool
+	// EOL runs xeol on the syft-json SBOM.
+	EOL bool
+	// TrivyBin, when set, runs `trivy sbom` on a CycloneDX SBOM from the same syft run, against the
+	// trivy DB in TrivyCacheDir (<dir>/db/trivy.db).
+	TrivyBin      string
+	TrivyCacheDir string
 
 	// excl serializes the rescan of an image whose marker was left by a crash during concurrent
 	// scans: alone, a second crash proves it was the one.
@@ -129,10 +147,10 @@ const catalogers = "-dotnet-portable-executable-cataloger,+alpm-db-cataloger,+ap
 
 // Scan scans one image. Credentials, pulled layers and xeol's config search path all live in a
 // per-scan temp dir that is removed before Scan returns.
-func (x *Xeol) Scan(ctx context.Context, t Target) ([]Finding, error) {
+func (x *Runner) Scan(ctx context.Context, t Target) (Result, error) {
 	_, digest, ok := strings.Cut(t.Ref, "@")
 	if !ok {
-		return nil, fmt.Errorf("image ref %q has no digest", t.Ref)
+		return Result{}, fmt.Errorf("image ref %q has no digest", t.Ref)
 	}
 	// A marker that outlives the process means the pod died (OOM kill) while this image was being
 	// scanned. If nothing else was scanning, it was the culprit: back off. Otherwise rescan it alone.
@@ -140,7 +158,7 @@ func (x *Xeol) Scan(ctx context.Context, t Target) ([]Finding, error) {
 	mark, err := os.ReadFile(marker)
 	suspect := err == nil
 	if st, err := os.Stat(marker); suspect && string(mark) == soloMark && err == nil && time.Since(st.ModTime()) < x.OOMBackoff {
-		return nil, &ScanError{Reason: ReasonOOM,
+		return Result{}, &ScanError{Reason: ReasonOOM,
 			Msg: "scanning this image ran out of memory; retrying after " + st.ModTime().Add(x.OOMBackoff).Format(time.RFC3339)}
 	}
 	if suspect && !x.Solo {
@@ -151,55 +169,124 @@ func (x *Xeol) Scan(ctx context.Context, t Target) ([]Finding, error) {
 		defer x.excl.RUnlock()
 	}
 	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	content := ""
 	if x.Solo || suspect {
 		content = soloMark
 	}
 	if err := os.WriteFile(marker, []byte(content), 0o644); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	defer func() { _ = os.Remove(marker) }() // only a crash leaves it behind
 
 	work, err := os.MkdirTemp(x.WorkDir, "scan-")
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	defer func() { _ = os.RemoveAll(work) }()
 	if t.DockerConfigJSON != nil {
 		if err := os.WriteFile(filepath.Join(work, "config.json"), t.DockerConfigJSON, 0o600); err != nil {
-			return nil, err
+			return Result{}, err
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, x.Timeout)
 	defer cancel()
 
-	sbom := filepath.Join(work, "sbom.json")
-	args := []string{"scan", "registry:" + t.Ref, "-q", "--select-catalogers", catalogers, "-o", "syft-json=" + sbom}
+	// One syft run writes the SBOM each enabled matcher reads: syft-json for xeol, CycloneDX for trivy.
+	sbom, cdx := filepath.Join(work, "sbom.json"), filepath.Join(work, "sbom.cdx.json")
+	args := []string{"scan", "registry:" + t.Ref, "-q", "--select-catalogers", catalogers}
+	if x.EOL {
+		args = append(args, "-o", "syft-json="+sbom)
+	}
+	if x.TrivyBin != "" {
+		args = append(args, "-o", "cyclonedx-json="+cdx)
+	}
 	if t.Platform != "" {
 		args = append(args, "--platform", t.Platform)
 	}
 	if err := x.run(ctx, io.Discard, work, x.Syft, args, "SYFT_CHECK_FOR_APP_UPDATE=false"); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 
-	// Never pass --api-key: it uploads results to xeol.io.
-	var out bytes.Buffer
-	err = x.run(ctx, &out, work, x.Bin, []string{"sbom:" + sbom, "-o", "json", "-q", "-l", lookahead},
-		"XEOL_DB_CACHE_DIR="+x.DBDir,
-		"XEOL_DB_AUTO_UPDATE=false",
-		"XEOL_DB_VALIDATE_AGE=false",
-		"XEOL_CHECK_FOR_APP_UPDATE=false")
-	if err != nil {
-		return nil, err
+	var res Result
+	if x.EOL {
+		// Never pass --api-key: it uploads results to xeol.io.
+		var out bytes.Buffer
+		err = x.run(ctx, &out, work, x.XeolBin, []string{"sbom:" + sbom, "-o", "json", "-q", "-l", lookahead},
+			"XEOL_DB_CACHE_DIR="+x.DBDir,
+			"XEOL_DB_AUTO_UPDATE=false",
+			"XEOL_DB_VALIDATE_AGE=false",
+			"XEOL_CHECK_FOR_APP_UPDATE=false")
+		if err != nil {
+			return Result{}, err
+		}
+		if res.Findings, err = parse(out.Bytes()); err != nil {
+			return Result{}, err
+		}
 	}
-	return parse(out.Bytes())
+	if x.TrivyBin != "" {
+		res.Vulns, res.VulnErr = x.trivy(ctx, work, cdx)
+	}
+	return res, nil
+}
+
+// trivy matches the CycloneDX SBOM against the local trivy DB. Any failure is reported as
+// ReasonTrivy, so the caller keeps the EOL findings of the same scan.
+func (x *Runner) trivy(ctx context.Context, work, cdx string) ([]Vuln, error) {
+	fail := func(err error) ([]Vuln, error) {
+		return nil, &ScanError{Reason: ReasonTrivy, Msg: err.Error()}
+	}
+	b, err := os.ReadFile(cdx)
+	if err != nil {
+		return fail(err)
+	}
+	if b, err = fixUpCycloneDX(b); err != nil {
+		return fail(err)
+	}
+	if err := os.WriteFile(cdx, b, 0o600); err != nil {
+		return fail(err)
+	}
+	// Scans never update a DB or call out: the DB is managed by internal/vulndb.
+	var out bytes.Buffer
+	err = x.run(ctx, &out, work, x.TrivyBin, []string{"sbom", cdx, "--scanners", "vuln", "-f", "json", "-q",
+		"--cache-dir", x.TrivyCacheDir, "--cache-backend", "memory",
+		"--skip-db-update", "--skip-java-db-update", "--offline-scan", "--skip-version-check", "--disable-telemetry"},
+		"TRIVY_DISABLE_VEX_NOTICE=true")
+	if err != nil {
+		return fail(err)
+	}
+	vulns, err := parseTrivy(out.Bytes())
+	if err != nil {
+		return fail(err)
+	}
+	if vulns == nil {
+		vulns = []Vuln{} // scanned, nothing found: replaces the previous rows
+	}
+	return vulns, nil
+}
+
+// Sweep removes per-scan dirs left behind by scans that a container restart interrupted
+// (e.g. an OOM kill): pulled layers and SBOMs would otherwise fill the scan volume.
+func (x *Runner) Sweep() error {
+	dir := x.WorkDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	left, err := filepath.Glob(filepath.Join(dir, "scan-*"))
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, d := range left {
+		errs = append(errs, os.RemoveAll(d))
+	}
+	return errors.Join(errs...)
 }
 
 // run executes one step of a scan with its stdout going to stdout.
-func (x *Xeol) run(ctx context.Context, stdout io.Writer, work, bin string, args []string, env ...string) error {
+func (x *Runner) run(ctx context.Context, stdout io.Writer, work, bin string, args []string, env ...string) error {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	// Don't hang on pipes held open by child processes after the context kills the step.
 	cmd.WaitDelay = time.Second

@@ -42,17 +42,19 @@ Each digest's last scan SHALL be saved to SQLite at `<state-dir>/results.db`. Af
 
 ## Data model
 
-`<state-dir>/results.db` (`/var/lib/xeol-operator/results.db` in the chart) holds one row per image digest. `findings` is a JSON array; its elements are shown as `FINDING` below but are not a separate table. Rows are deleted once `next_at` is more than a week in the past (`internal/results/results.go`).
+`<state-dir>/results.db` (`/var/lib/xeol-operator/results.db` in the chart) holds one row per image digest. `findings` and `vulns` are JSON arrays; their elements are shown as `FINDING` and `VULN` below but are not separate tables. Rows are deleted once `next_at` is more than a week in the past (`internal/results/results.go`).
 
 ```mermaid
 erDiagram
     RESULTS ||--o{ FINDING : "findings (JSON array)"
+    RESULTS ||--o{ VULN : "vulns (JSON array)"
     RESULTS {
         TEXT digest PK "sha256:..."
         INTEGER scanned_at "Unix seconds of the last scan"
         INTEGER next_at "Unix seconds of the next scan; indexed (results_next_at)"
-        TEXT err_reason "'' on success, else auth, not_found, timeout, oom, other"
+        TEXT err_reason "'' on success, else auth, not_found, timeout, oom, other, trivy"
         TEXT findings "JSON array of FINDING, kept from the previous scan on failure"
+        TEXT vulns "JSON array of VULN; null if never scanned with trivy; kept on a trivy failure"
     }
     FINDING {
         string Product "endoflife.date product, e.g. Python"
@@ -64,5 +66,15 @@ erDiagram
         string PURL "package URL"
         string Distro "image distro, e.g. debian 12"
         string URL "endoflife.date page"
+    }
+    VULN {
+        string ID "e.g. CVE-2023-5363"
+        string Title "advisory title"
+        string Severity "CRITICAL, HIGH, MEDIUM, LOW or UNKNOWN"
+        string Package "package name"
+        string Version "installed version"
+        string FixedVersion "empty when no fix is released"
+        string Type "e.g. alpine, debian, gobinary"
+        string URL "primary reference"
     }
 ```

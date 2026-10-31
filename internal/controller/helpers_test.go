@@ -71,7 +71,7 @@ func TestInventoryDue(t *testing.T) {
 	if added, _ := inv.SetPod(p, []PodImage{{Digest: "sha256:a"}, {Digest: "sha256:b"}}); len(added) != 0 {
 		t.Fatalf("re-adding the same pod added %v", added)
 	}
-	inv.SetResult("sha256:a", nil, "", now, now.Add(time.Hour))
+	inv.SetResult("sha256:a", scanner.Result{}, "", now, now.Add(time.Hour))
 	if due := inv.Due(now); len(due) != 1 || due[0] != "sha256:b" {
 		t.Fatalf("due = %v, want only b", due)
 	}
@@ -85,7 +85,7 @@ func TestInventoryKeepsResultsOnPodUpdate(t *testing.T) {
 	inv := NewInventory()
 	p := types.NamespacedName{Namespace: "a", Name: "p"}
 	inv.SetPod(p, []PodImage{{Digest: "sha256:a"}, {Digest: "sha256:b"}})
-	inv.SetResult("sha256:a", nil, "", time.Now(), time.Now().Add(time.Hour))
+	inv.SetResult("sha256:a", scanner.Result{}, "", time.Now(), time.Now().Add(time.Hour))
 	if _, removed := inv.SetPod(p, []PodImage{{Digest: "sha256:a"}}); len(removed) != 1 || removed[0] != "sha256:b" { // b removed, a unchanged
 		t.Fatalf("removed = %v, want [sha256:b]", removed)
 	}
@@ -114,9 +114,31 @@ func TestInventoryRestoreKeepsFindingsOfFailedScan(t *testing.T) {
 	inv.SetPod(types.NamespacedName{Namespace: "x", Name: "a"}, []PodImage{{Digest: "sha256:d"}})
 	now := time.Now()
 	f := []scanner.Finding{{Product: "Python"}}
-	inv.SetResult("sha256:d", f, "auth", now, now)   // restored: last scan failed, earlier findings saved
-	inv.SetResult("sha256:d", nil, "auth", now, now) // another failed scan keeps them
+	inv.SetResult("sha256:d", scanner.Result{Findings: f}, "auth", now, now) // restored: last scan failed, earlier findings saved
+	inv.SetResult("sha256:d", scanner.Result{}, "auth", now, now)            // another failed scan keeps them
 	if img, _ := inv.Get("sha256:d"); len(img.Findings) != 1 {
 		t.Fatalf("findings = %v", img.Findings)
+	}
+}
+
+func TestInventoryTrivyFailureKeepsVulns(t *testing.T) {
+	inv := NewInventory()
+	inv.SetPod(types.NamespacedName{Namespace: "x", Name: "a"}, []PodImage{{Digest: "sha256:d"}})
+	now := time.Now()
+	old := []scanner.Vuln{{ID: "CVE-1", Package: "libcrypto3"}}
+	inv.SetResult("sha256:d", scanner.Result{Findings: []scanner.Finding{{Product: "Python", Cycle: "3.8"}}, Vulns: old}, "", now, now)
+	// Next scan: xeol succeeds with new findings, trivy fails.
+	inv.SetResult("sha256:d", scanner.Result{Findings: []scanner.Finding{{Product: "Python", Cycle: "3.9"}}}, scanner.ReasonTrivy, now, now)
+	img, _ := inv.Get("sha256:d")
+	if len(img.Findings) != 1 || img.Findings[0].Cycle != "3.9" {
+		t.Errorf("findings = %v, want the new scan's", img.Findings)
+	}
+	if len(img.Vulns) != 1 || img.Vulns[0].ID != "CVE-1" || img.ErrReason != scanner.ReasonTrivy {
+		t.Errorf("vulns = %v, reason %q; want the previous vulns kept and reason trivy", img.Vulns, img.ErrReason)
+	}
+	// A later successful trivy run with nothing found replaces them.
+	inv.SetResult("sha256:d", scanner.Result{Findings: img.Findings, Vulns: []scanner.Vuln{}}, "", now, now)
+	if img, _ := inv.Get("sha256:d"); img.Vulns == nil || len(img.Vulns) != 0 {
+		t.Errorf("vulns = %#v, want empty", img.Vulns)
 	}
 }

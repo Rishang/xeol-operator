@@ -1,0 +1,282 @@
+---
+title: Architecture
+description: "How xeol-operator finds running images, scans them with syft, xeol and trivy, and serves the results."
+---
+
+This page explains how xeol-operator works inside. It finds the images your cluster runs, scans them, and serves the results.
+
+- To install and use the operator, see [Usage](/xeol-operator/usage/).
+- For chart values, see [Helm setup](/xeol-operator/helm/).
+
+![xeol-operator architecture: Kubernetes API on the left, the operator pod in the middle (config file watcher, Pod controller, Inventory, results.db, scan queue, syft feeding xeol and the optional trivy, the EOL and vulnerability DB managers, HTTP endpoints), external systems on the right, including endoflife.date and trivy's DB registries](../../assets/architecture.svg)
+
+The numbers in the diagram match the steps under [How it works](#how-it-works).
+
+## Components
+
+Everything runs in one pod. The operator creates no scan Jobs and no Secrets. It uses no external database.
+
+| Component | Code | Job |
+|---|---|---|
+| Config file | `internal/config`, `internal/controller/config.go` | Loads the config file; reloads it on change |
+| Pod controller | `internal/controller/pod_controller.go` | Turns running Pods into image digests |
+| Inventory | `internal/controller/inventory.go` | In-memory map, keyed by digest |
+| Results store | `internal/results` | SQLite copy of each digest's last scan |
+| Scan queue | `internal/scanner/queue.go` | Work queue keyed by digest |
+| Scanner | `internal/scanner/xeol.go`, `trivy.go` | Runs syft, then xeol and/or trivy |
+| EOL DB manager | `internal/eoldb` | Builds or reads xeol's database |
+| Vulnerability DB manager | `internal/vulndb` | Downloads or reads trivy's database (with `--trivy`) |
+| Collector | `internal/metrics/collector.go` | Renders Prometheus metrics on each scrape |
+| HTTP API, UI, MCP | `internal/api` | JSON API, web page and MCP tools |
+
+More detail on each component:
+
+- **Config file:** loads the mounted config file into a live `Config` at startup. It reloads it when the file changes.
+- **Pod controller:** each image digest is attributed to its top-level workload. A digest is the `sha256:...` hash that identifies one exact image build.
+- **Inventory:** maps each digest to its workloads, pull secrets, findings, vulnerabilities and next scan time.
+- **Results store:** keeps the last scans so a container restart doesn't rescan everything.
+- **Scan queue:** runs `--scan-workers` workers, plus a ticker that queues due rescans.
+- **Scanner:** runs syft once, then xeol (EOL) and/or trivy (vulnerabilities) as subprocesses. It parses their output into flat rows.
+- **EOL DB manager:** builds xeol's database from endoflife.date at startup and daily, or reads a mounted one.
+- **Vulnerability DB manager:** with `--trivy`, downloads trivy's database at startup and daily, or reads a mounted one.
+- **Collector:** builds the metrics from the Inventory.
+- **HTTP API, UI, MCP:** served on the metrics port, read from the Inventory.
+
+## How it works
+
+### 1. Configuration
+
+You set `scanner.*` values in the chart. The operator reads them from a file at startup and whenever the file changes.
+
+- The chart writes the values into the ConfigMap `xeol-operator-config`.
+- The ConfigMap is mounted at `/etc/xeol-operator/config.yaml`.
+- At startup the operator parses the file strictly into a `Config` snapshot. It covers the namespace selector, globs, interval, workload kinds and labels, and ignore rules.
+- Every other component reads that snapshot.
+- If the file is bad at startup, the operator stops and shows the error.
+
+Changes apply without a restart:
+
+- The operator re-reads the file every 5 seconds.
+- The kubelet updates the mounted file, because the ConfigMap is mounted without `subPath`.
+- When the content has changed, the new config is applied and every Pod is re-evaluated.
+- A bad edit keeps the previous config. The error is logged and shows as `config_error` in `/api/v1/status`.
+
+The operator writes nothing to the cluster. Its status (images scanned, findings, last sweep, DB age, failed scans) comes from three places:
+
+- `/api/v1/status`
+- the metrics
+- the readiness probe
+
+### 2. Discovery
+
+The operator watches Pods only. For each Pod the controller does five things:
+
+1. **Filters the Pod.** It drops the Pod if any of these are true:
+   - it has finished (`Succeeded`/`Failed`)
+   - it is terminating
+   - it is in an excluded namespace
+   - it is outside the namespace selector
+2. **Finds the top-level workload.** It walks the controller `ownerReferences` upward. Examples: Pod → ReplicaSet → Deployment, Pod → Job → CronJob, or any other kind such as an Argo Rollout. Owners are read as metadata only.
+3. **Checks the workload kind.** It keeps the Pod only if the workload's kind is in `workloadKinds`. The default is Deployment, StatefulSet, DaemonSet, Job, CronJob. `[]` means every kind.
+4. **Reads the image digest.** It reads each container's `imageID` from the Pod status. It splits it into repository and digest. Two cases are skipped:
+   - A bare `sha256:...`. This is an image loaded straight onto the node, so there is no registry to pull from.
+   - Anything matching `excludeImages`.
+5. **Collects pull details.** It gathers the `imagePullSecrets` of the Pod and of its ServiceAccount. It also records the node's `os/arch`, so multi-arch images are scanned for the variant that actually runs.
+
+### 3. Inventory
+
+Each image becomes one entry, keyed by digest. Ten Pods running the same digest are one entry with ten owners. That means one scan, not ten.
+
+When a digest is new to the Inventory, the operator looks up its saved result in SQLite:
+
+- If that result is still current (its next scan time is in the future), it is restored. No scan is queued.
+- Otherwise the digest is queued (step 4).
+
+When the last Pod running a digest goes away:
+
+- The digest leaves the Inventory.
+- Its metric series disappear on the next scrape.
+- Its saved result stays in SQLite for a week past its next scan time. So an image that comes back, such as a CronJob's next run, is restored instead of rescanned.
+
+### 4. Scheduling
+
+The scan queue decides which digests get scanned and when. It is a client-go workqueue keyed by digest. This gives two guarantees:
+
+- A digest already in the queue is not added twice.
+- Two workers never scan the same digest at once.
+
+How digests get queued and run:
+
+- The Pod controller adds new digests straight away.
+- A ticker adds digests whose next scan time has passed. It runs every `--scan-check-interval` (Helm `scanner.checkInterval`, default `1m`).
+- `eol.enabled` (default on) and `trivy.enabled` (default off) choose the scan types. At least one must be on.
+- Scanning starts only once the database of every enabled scan type is ready.
+- `--scan-workers` (default `1`) sets how many scans run at once. Each scan needs its own memory.
+
+### 5. Scan
+
+A worker scans one digest in six steps:
+
+1. **Prepares credentials.** It creates a fresh temp dir under `/tmp`. It builds a `config.json` there from the pull secrets. The secrets are read from the API server at that moment and never cached. The same dir serves as `HOME`, `TMPDIR` and `DOCKER_CONFIG` for both subprocesses.
+2. **Writes an in-flight marker** for the digest (see [Failure handling](#failure-handling)).
+3. **Runs syft once.** syft builds the SBOM (software bill of materials), a list of every package in the image.
+   - Command: `syft scan registry:<repo>@<digest> --platform <os/arch>`. It pulls the image from its registry.
+   - Output for xeol: `-o syft-json=sbom.json`.
+   - Output for trivy, when trivy is on: `-o cyclonedx-json=sbom.cdx.json`. trivy can't read syft-json.
+   - The cataloger selection matches what xeol itself would use.
+4. **Runs xeol (when EOL is on).**
+   - Command: `xeol sbom:sbom.json -o json -q -l 10y`, against the local EOL database.
+   - Auto-update and the age check are turned off.
+   - `--api-key` is never passed, so nothing is uploaded.
+   - xeol's JSON becomes flat findings: product, cycle, EOL date, package, version, type, purl, distro, endoflife.date URL.
+   - Repeats of the same package found at several paths are dropped.
+5. **Runs trivy (when trivy is on).**
+   - First it adds trivy's source-package properties (`aquasecurity:trivy:SrcName`, ...) to the OS packages in `sbom.cdx.json`. They come from each purl's `upstream` qualifier. Without them, trivy misses subpackages such as libcrypto3 from openssl.
+   - Then it runs `trivy sbom --scanners vuln -f json` against the local trivy database. Every update and outbound call is turned off.
+   - trivy's JSON becomes flat vulnerability rows: CVE, title, severity, package, installed and fixed version, type, reference URL.
+   - There is one row per (CVE, package, version).
+6. **Cleans up.** It deletes the temp dir (credentials, layers, both SBOMs) and the marker. At startup, the operator also deletes temp dirs left behind by a scan that a container restart interrupted.
+
+Resource limits keep scans inside the pod's limits:
+
+- syft, xeol and trivy get `GOMEMLIMIT` (`scanner.goMemLimit`) and `GOMAXPROCS` (`scanner.maxProcs`).
+- `scanner.timeout` bounds the whole scan.
+
+### 6. Results
+
+Each result goes into the Inventory and into SQLite, with a next scan time:
+
+- **Success:** `now + interval` from the config file (default `24h`).
+- **Failure:** `now + 1h`. The previous findings are kept, and the error reason is recorded.
+
+Each digest is rescanned on its own schedule, not all at once.
+
+A database rebuild does not trigger rescans. The EOL date is stored with the result, and "already EOL" is worked out at query time. So only new endoflife.date data has to wait for the next rescan.
+
+### 7. EOL database
+
+The operator needs an EOL database before it can scan. It gets one in one of two modes.
+
+**`online` mode (the default):**
+
+- The EOL DB manager downloads `https://endoflife.date/api/v1/products/full` at startup and every 24 hours.
+- It builds xeol's SQLite database from that file.
+- Each build is written to a temp dir and swapped in only when complete.
+- A failed build keeps the previous database. It is retried the next day, or every 30 seconds while there is no usable database.
+- The operator never contacts `data.xeol.io`.
+
+**`mounted` mode:** the operator reads a prebuilt database from a volume instead. This is for air-gapped clusters; see [Air-gapped installation](/xeol-operator/air-gapped/).
+
+Readiness and staleness:
+
+- The pod is Ready once a valid database has existed at least once. This is checked with `xeol db status`.
+- The build time is exported as `xeol_db_built_timestamp_seconds`.
+- The `XeolDatabaseStale` alert fires after 30 days.
+
+### 8. Export
+
+One HTTP server on the metrics port serves everything. It reads the Inventory and Config on each request. Nothing is pushed anywhere.
+
+| Path | What | Enabled by |
+|---|---|---|
+| `/metrics` | Prometheus metrics (see the [README](https://github.com/Rishang/xeol-operator#metrics)) | always |
+| `/api/v1/status`, `/namespaces`, `/workloads`, `/findings` | Read-only JSON for Grafana's Infinity datasource | always (`/findings` with `eol.enabled`) |
+| `/api/v1/vulnerabilities` | One row per workload, CVE and package | `trivy.enabled` |
+| `/`, `/ui/report` | Server-rendered web page | `ui.enabled` |
+| `/mcp` | `status`, `namespaces`, `workloads` and `findings` as MCP tools (Streamable HTTP) | `mcp.enabled` |
+
+`ignoreProducts` rules are applied here, at export time. So changing them takes effect without a rescan.
+
+The metrics come from a custom collector. It builds every series from the Inventory on each scrape. When an image stops running, there is nothing to delete: its series simply stop appearing.
+
+Series count stays small:
+
+- Findings are one series per (digest, product, cycle, package, version).
+- Workloads are one series per (digest, workload).
+- The two are joined on `digest`.
+- So cardinality (the number of series) does not grow with Pod count.
+
+## Where data is stored
+
+All writable data lives on emptyDir volumes. An emptyDir is scratch space that survives a container restart but is wiped when the pod is replaced.
+
+| What | Path in the container | Volume | Survives |
+|---|---|---|---|
+| EOL database (converted for xeol) | `/var/cache/xeol/1/xeol.db` | `xeol-db` emptyDir | container restart; rebuilt on a new pod |
+| EOL database metadata (build time, checksum) | `/var/cache/xeol/1/metadata.json` | `xeol-db` emptyDir | same |
+| EOL database in `mounted` mode | `<db.mounted.path>/1/xeol.db`, default `/xeol-db/1/xeol.db` | your volume, read-only | as long as the volume |
+| Scan results cache (SQLite) | `/var/lib/xeol-operator/results.db` | `state` emptyDir | container restart; a new pod starts empty |
+| In-flight scan markers | `/var/lib/xeol-operator/inflight/<digest>` | `state` emptyDir | container restart (that is the point) |
+| Per-scan temp dir (pull credentials, SBOM, image layers) | `/tmp/scan-*` | `tmp` emptyDir | deleted when the scan ends |
+
+The paths come from `--db-dir` and `--state-dir`, which the chart sets.
+
+During an EOL database rebuild:
+
+- The new database is written to `/var/cache/xeol/.build-*`, then moved into place.
+- The previous copy is briefly kept as `/var/cache/xeol/1.old`.
+
+With trivy on, the trivy database is handled the same way:
+
+- It is downloaded to `/var/cache/trivy/current/db/trivy.db`. This is the main DB only, ~1.6 GB.
+- The download goes into `/var/cache/trivy/.download-*` first, then is swapped in.
+- The emptyDir (`trivy.dbSizeLimit`, 5Gi) holds the current copy and the next one.
+- A download dir left by a container restart is removed before the next download.
+- After a restart, a database downloaded less than a day ago is used as is. It is not fetched again.
+
+`results.db` has one table, `results`, with one row per digest. Its columns are `digest`, `scanned_at`, `next_at`, `err_reason`, and `findings` and `vulns` as JSON. Rows are dropped once they are a week past their next scan time.
+
+Entity diagrams of both SQLite files are in the OpenSpec specs:
+
+- `results.db` in [image-scanning](https://github.com/Rishang/xeol-operator/blob/main/openspec/specs/image-scanning/spec.md#data-model)
+- `xeol.db` in [eol-database](https://github.com/Rishang/xeol-operator/blob/main/openspec/specs/eol-database/spec.md#data-model)
+
+## Failure handling
+
+| Situation | What happens |
+|---|---|
+| Registry auth, image not found, timeout | Recorded with a reason; retried after 1h |
+| trivy step fails (syft and xeol succeeded) | Reason `trivy`; retried after 1h |
+| A scan runs the pod out of memory | Skipped for 24h, or rescanned alone first |
+| endoflife.date unreachable | The current database stays in use |
+| Container restart | Only overdue digests are rescanned |
+| New pod (upgrade, reschedule) | Database rebuilt; every image scanned again |
+
+The details for each case:
+
+- **Registry auth, image not found, timeout:** the reason is `auth`, `not_found`, `timeout` or `other`. It is counted in `xeol_scan_errors_total`. The previous findings are kept until the retry after 1h.
+- **trivy step fails:** the new EOL findings are kept, and the previous vulnerabilities stay.
+- **Out of memory:** the container restarts and finds the digest's in-flight marker.
+  - If that scan was running alone, the digest is skipped for 24h with reason `oom`, instead of crash-looping.
+  - If other scans were running too, it is rescanned alone first to find the culprit.
+- **endoflife.date unreachable:** if there is no database yet, the pod stays unready and scans wait.
+- **Container restart:** the Inventory is rebuilt from Pods, and results are restored from `results.db`.
+- **New pod:** all volumes are emptyDirs, so nothing carries over.
+
+## Leader election and replicas
+
+The chart runs one replica with leader election on. Leader election means that, when several replicas run, only one (the leader) does the work at a time.
+
+- The Pod controller and the scan queue run only on the leader. So only the leader has an Inventory.
+- Every replica reads the config file.
+- A standby still builds its own EOL database, so it can take over.
+- A standby answers `503` on the JSON API, the web page and MCP.
+- Metrics on a standby contain only the database build time and empty scan counters.
+
+## Security
+
+- **RBAC is read-only.** The operator has get/list/watch on Pods, Namespaces, Nodes, ServiceAccounts and the apps/batch workload kinds, and `get` on Secrets. The config file comes from a mounted volume, so it needs no API access. The operator creates nothing in the cluster.
+- **Pull secrets are handled briefly.** They are read one `get` at a time when a scan starts. They are never cached or listed. They are written to a `0600` file in that scan's temp dir and deleted with it. They are never logged.
+- **The container is locked down.** It runs as non-root with a read-only root filesystem. Every writable path is one of the emptyDirs above.
+- **There is no login.** The web page, MCP and JSON API have no login. Reach them with `port-forward`, and keep them off public Ingress.
+
+## Design choices
+
+- **Digest, not tag or PodSpec.** The digest in `imageID` is exactly what runs.
+  - A re-pushed tag is caught as soon as Pods restart.
+  - A template change that keeps the image (env, resources) costs nothing.
+  - An image shared by many workloads is scanned once.
+- **In-process scans, not Jobs.** syft and xeol are bundled in the operator image and run as subprocesses. There are no Jobs, temp Secrets or log scraping. The trade-off: one pod's CPU and memory limit how many scans run at once.
+- **Running Pods only.** Old ReplicaSets and unused templates are never scanned. CronJob images are only exported while a run's Pod exists.
+- **Metrics built on scrape.** There is nothing to reconcile or delete when images stop running. A restart can't leave stale series.
+- **EOL data built locally.** xeol is only the matcher. The database comes from endoflife.date. It also covers distros (Debian, Alpine, Ubuntu) that xeol's own database misses.

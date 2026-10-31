@@ -31,7 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/results"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
@@ -86,7 +86,7 @@ var _ = Describe("Pod controller", func() {
 
 	BeforeEach(func() {
 		inv, cfg, enqueued = NewInventory(), &Config{}, nil
-		snap, err := SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{ExcludeNamespaces: []string{"kube-*"}})
+		snap, err := SnapshotFrom(&config.Config{ExcludeNamespaces: []string{"kube-*"}})
 		Expect(err).NotTo(HaveOccurred())
 		cfg.Set(snap)
 		r = &PodReconciler{Client: k8sClient, APIReader: k8sClient, Config: cfg, Inventory: inv,
@@ -206,7 +206,7 @@ var _ = Describe("Pod controller", func() {
 		reconcile(runningPod(ns, "local", nil, testDigest)) // k3d/kind-loaded image: no registry
 		Expect(inv.Images()).To(BeEmpty())
 
-		snap, _ := SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{
+		snap, _ := SnapshotFrom(&config.Config{
 			ExcludeImages:     []string{"python:*"},
 			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"scan": "yes"}},
 		})
@@ -219,7 +219,7 @@ var _ = Describe("Pod controller", func() {
 
 	It("tracks only the configured top-level workload kinds", func() {
 		ns := newNamespace(nil)
-		snap, _ := SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{WorkloadKinds: []string{"Deployment", "CronJob"}})
+		snap, _ := SnapshotFrom(&config.Config{WorkloadKinds: []string{"Deployment", "CronJob"}})
 		cfg.Set(snap)
 		prom := &metav1.OwnerReference{APIVersion: "monitoring.coreos.com/v1", Kind: "Prometheus", Name: "k8s", UID: "u2", Controller: new(true)}
 		key := runningPod(ns, "prometheus-k8s-0", prom, "docker.io/library/python@"+testDigest)
@@ -227,13 +227,13 @@ var _ = Describe("Pod controller", func() {
 		reconcile(runningPod(ns, "bare", nil, "docker.io/library/python@"+testDigest))
 		Expect(inv.Images()).To(BeEmpty(), "Prometheus and bare Pod kinds are not in the list")
 
-		snap, _ = SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{}) // empty list: every kind
+		snap, _ = SnapshotFrom(&config.Config{}) // empty list: every kind
 		cfg.Set(snap)
 		reconcile(key)
 		img, _ := inv.Get(testDigest)
 		Expect(img.Workloads).To(ConsistOf(HaveField("Kind", "Prometheus")))
 
-		snap, _ = SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{WorkloadKinds: []string{"Deployment"}})
+		snap, _ = SnapshotFrom(&config.Config{WorkloadKinds: []string{"Deployment"}})
 		cfg.Set(snap)
 		reconcile(key) // a kind dropped from the list drops its Pods on re-evaluation
 		Expect(inv.Images()).To(BeEmpty())
@@ -276,12 +276,5 @@ var _ = Describe("Pod controller", func() {
 		Expect(enqueued).To(BeEmpty())
 		img, _ = inv.Get(testDigest)
 		Expect(img.Findings).To(HaveLen(1))
-	})
-
-	It("does nothing without XeolScanner/default", func() {
-		cfg.Clear()
-		ns := newNamespace(nil)
-		reconcile(runningPod(ns, "p", nil, "docker.io/library/python@"+testDigest))
-		Expect(inv.Images()).To(BeEmpty())
 	})
 })

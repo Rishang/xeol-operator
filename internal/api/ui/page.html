@@ -138,13 +138,50 @@
   .notice { margin: 40px 0; padding: 16px 18px; border-left: 3px solid var(--soon); background: var(--sheet); max-width: 70ch; }
   footer { border-top: 1px solid var(--rule); padding: 14px 0 32px; color: var(--muted); font-size: 13px; }
   #report.htmx-request { opacity: .6; }
+
+  /* Tabs (EOL / Trivy), shown when both scan types are on. */
+  .tabs { display: flex; gap: 4px; margin: 18px 0 0; border-bottom: 1px solid var(--rule); }
+  .tabs a { padding: 7px 16px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted);
+            text-decoration: none; font-weight: 550; margin-bottom: -1px; }
+  .tabs a:hover { color: var(--ink); }
+  .tabs a.on { color: var(--ink); background: var(--sheet); border-color: var(--rule); }
+  #tabctl { display: contents; }
+  /* Severities reuse the status colours: critical red, high EOL magenta, medium amber, low/unknown muted. */
+  .sev { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: 12px; font-weight: 650; color: #fff; }
+  .sev-critical { background: var(--bad); } .sev-high { background: var(--eol); } .sev-medium { background: var(--warn); }
+  .sev-low, .sev-unknown { background: var(--muted); }
+  .cells .sev-critical, .cells .sev-high, .cells .sev-medium, .cells .sev-low, .cells .sev-unknown { color: #fff; }
+  .cells .zero-cell { background: var(--ok); }
+  /* Five severity counts share one wide tile: scale them down so three or four digits still fit. */
+  .cells.sevs b { font-size: clamp(18px, 1.9vw, 32px); }
+  /* Fixed versions can be long lists (e.g. Go modules); wrap them instead of widening the table. */
+  td.fixed { white-space: normal; overflow-wrap: anywhere; min-width: 170px; max-width: 240px; }
+  .pill.crit { color: var(--bad); background: var(--eol-wash); } .pill.high { color: var(--eol); background: var(--eol-wash); }
+  /* Package strip: like the runway, one band per severity (worst left), one clickable mark per package. */
+  .pkgs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); min-height: 92px; overflow: hidden;
+          background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; }
+  .pkgs .zone { display: flex; flex-wrap: wrap; align-content: center; align-items: center; justify-content: center; gap: 6px; padding: 12px 10px; }
+  .pkgs .zone + .zone { border-left: 1px solid var(--rule); }
+  .pkgs .zone.sev-critical { background: color-mix(in srgb, var(--bad) 16%, var(--sheet)); }
+  .pkgs .zone.sev-high { background: color-mix(in srgb, var(--eol) 12%, var(--sheet)); }
+  .pkgs .zone.sev-medium { background: color-mix(in srgb, var(--warn) 10%, var(--sheet)); }
+  .pkgs .zone.sev-low, .pkgs .zone.sev-unknown { background: var(--sheet); }
+  .pkgs .mark { all: unset; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--sheet); cursor: pointer; transition: transform .1s; }
+  .pkgs .mark.sev-critical { background: var(--bad); } .pkgs .mark.sev-high { background: var(--eol); }
+  .pkgs .mark.sev-medium { background: var(--warn); } .pkgs .mark.sev-low, .pkgs .mark.sev-unknown { background: var(--muted); }
+  .pkgs .mark:hover, .pkgs .mark:focus-visible { transform: scale(1.3); box-shadow: 0 0 0 2px var(--ink); }
+  .pkgs .mark.on { box-shadow: 0 0 0 2px var(--ink); } .pkgs .mark.dim { opacity: .3; }
+  .pkgscale { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 6px 0 40px; font-size: 12px; color: var(--muted);
+              text-align: center; font-variant-numeric: tabular-nums; }
+  .pkgscale b { color: var(--ink); font-weight: 600; }
+  td.cve a { font-weight: 600; }
   @media (prefers-reduced-motion: no-preference) { #report { transition: opacity .2s; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand">xeol-operator<small>End-of-life software in running images</small></div>
+    <div class="brand">xeol-operator<small>{{if and .EOLEnabled .Tabs}}End-of-life software and known vulnerabilities{{else if .EOLEnabled}}End-of-life software{{else}}Known vulnerabilities{{end}} in running images</small></div>
     <!-- Refresh re-runs the report with the current filters; without htmx it reloads the page. -->
     <form id="filters" method="get" action="" hx-get="ui/report" hx-target="#report" hx-indicator="#report"
           hx-trigger="input delay:300ms, submit" hx-sync="this:replace">
@@ -163,11 +200,7 @@
       <label>Filter rows
         <input type="search" name="q" value="{{.Filter}}" placeholder="workload, product, image…" autocomplete="off">
       </label>
-      <label>Upcoming window, days
-        <select name="within_days">
-          {{- range windows .WithinDays}}<option value="{{.Days}}" {{if eq .Days $.WithinDays}}selected{{end}}>{{.Label}}</option>{{end}}
-        </select>
-      </label>
+      {{- template "tabctl" .}}
       <button class="refresh" type="submit">Refresh</button>
     </form>
   </header>
@@ -176,9 +209,65 @@
 </body>
 </html>
 
+{{/* tabctl: the header controls that depend on the tab. With tabs, /ui/report replaces them out of band,
+   so the filters form keeps submitting the tab shown. Without tabs, the markup is as before tabs existed. */}}
+{{define "tabctl"}}
+{{- if .Tabs}}<span id="tabctl"{{if .Fragment}} hx-swap-oob="true"{{end}}><input type="hidden" name="tab" value="{{.Tab}}" form="filters">{{end}}
+{{- if eq .Tab "trivy"}}
+      <label>Fixed version
+        <select name="fixable" form="filters">
+          <option value="" {{if ne .Fixable "only"}}selected{{end}}>All</option>
+          <option value="only" {{if eq .Fixable "only"}}selected{{end}}>Fixable only</option>
+        </select>
+      </label>
+{{- else}}
+      <label>Upcoming window, days
+        <select name="within_days">
+          {{- range windows .WithinDays}}<option value="{{.Days}}" {{if eq .Days $.WithinDays}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </label>
+{{- end}}
+{{- if .Tabs}}</span>{{end}}
+{{- end}}
+
+{{/* thead: a sortable table's header row; each column has a sort button and a filter popover. */}}
+{{define "thead"}}
+        <tr>
+          {{- range .}}{{$c := .}}
+          <th class="{{if .Num}}num{{end}}" {{if .Arrow}}aria-sort="{{if eq .Arrow "▲"}}ascending{{else}}descending{{end}}"{{end}}>
+            <div class="th">
+              <button class="sort" type="submit" form="filters" name="sort" value="{{.Next}}" title="Sort by {{.Title}}">{{.Title}}<span aria-hidden="true">{{.Arrow}}</span></button>
+              <button class="funnel{{if .Active}} on{{end}}" type="button" popovertarget="pop-{{.Key}}" aria-label="Filter {{.Title}}" style="anchor-name: --f-{{.Key}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg></button>
+            </div>
+            <div id="pop-{{.Key}}" class="pop" popover style="position-anchor: --f-{{.Key}}">
+              <p class="pop-title">{{.Title}}</p>
+              <input type="search" name="f_{{.Key}}" value="{{.Filter}}" form="filters" placeholder="Contains…" aria-label="{{.Title}} contains" autocomplete="off">
+              <div class="vals">
+                {{- range .Values}}
+                <label><input type="checkbox" name="v_{{$c.Key}}" value="{{.Value}}" form="filters" {{if .Checked}}checked{{end}}> {{if .Value}}{{.Value}}{{else}}(empty){{end}}</label>
+                {{- end}}
+              </div>
+              <div class="acts">
+                <button class="clear" type="submit" form="filters" name="clear" value="{{.Key}}">Clear</button>
+                <button type="button" popovertarget="pop-{{.Key}}" popovertargetaction="hide">Cancel</button>
+                <button class="ok" type="submit" form="filters">OK</button>
+              </div>
+            </div>
+          </th>
+          {{- end}}
+        </tr>
+{{- end}}
+
 {{define "report"}}
+{{- if .Tabs}}
+<nav class="tabs" aria-label="Report">
+  {{- range .TabLinks}}<a href="{{.Href}}" hx-get="ui/report{{.Href}}" hx-target="#report"{{if .On}} class="on" aria-current="page"{{end}}>{{.Title}}</a>{{end}}
+</nav>
+{{- if .Fragment}}{{template "tabctl" .}}{{end}}
+{{- end}}
 {{- if not .Leader}}
 <p class="notice">This replica is on standby and holds no scan results. Reload to reach the leader, or port-forward the leader pod: <code>kubectl port-forward deploy/xeol-operator 8080</code>.</p>
+{{- else if eq .Tab "trivy"}}{{template "trivy" .}}
 {{- else}}
 <p class="stamp">Updated <span>{{.Updated}}</span></p>
 {{- with .Status}}
@@ -220,31 +309,7 @@
   <input type="hidden" name="sort" value="{{.Sort}}" form="filters">
   <div class="table">
     <table class="findings">
-      <thead>
-        <tr>
-          {{- range .Cols}}{{$c := .}}
-          <th class="{{if .Num}}num{{end}}" {{if .Arrow}}aria-sort="{{if eq .Arrow "▲"}}ascending{{else}}descending{{end}}"{{end}}>
-            <div class="th">
-              <button class="sort" type="submit" form="filters" name="sort" value="{{.Next}}" title="Sort by {{.Title}}">{{.Title}}<span aria-hidden="true">{{.Arrow}}</span></button>
-              <button class="funnel{{if .Active}} on{{end}}" type="button" popovertarget="pop-{{.Key}}" aria-label="Filter {{.Title}}" style="anchor-name: --f-{{.Key}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg></button>
-            </div>
-            <div id="pop-{{.Key}}" class="pop" popover style="position-anchor: --f-{{.Key}}">
-              <p class="pop-title">{{.Title}}</p>
-              <input type="search" name="f_{{.Key}}" value="{{.Filter}}" form="filters" placeholder="Contains…" aria-label="{{.Title}} contains" autocomplete="off">
-              <div class="vals">
-                {{- range .Values}}
-                <label><input type="checkbox" name="v_{{$c.Key}}" value="{{.Value}}" form="filters" {{if .Checked}}checked{{end}}> {{if .Value}}{{.Value}}{{else}}(empty){{end}}</label>
-                {{- end}}
-              </div>
-              <div class="acts">
-                <button class="clear" type="submit" form="filters" name="clear" value="{{.Key}}">Clear</button>
-                <button type="button" popovertarget="pop-{{.Key}}" popovertargetaction="hide">Cancel</button>
-                <button class="ok" type="submit" form="filters">OK</button>
-              </div>
-            </div>
-          </th>
-          {{- end}}
-        </tr>
+      <thead>{{template "thead" .Cols}}
       </thead>
       <tbody>
       {{- range .Findings}}
@@ -314,4 +379,121 @@
   Current state only; Refresh to update.
 </footer>
 {{- end}}
+{{end}}
+
+{{define "trivy"}}
+<p class="stamp">Updated <span>{{.Updated}}</span></p>
+{{- with .Status.Vulnerabilities}}
+<h1 class="sr">Vulnerability summary</h1>
+<div class="tiles">
+  <div class="tile {{if .WorkloadsCritical}}bad{{else}}good{{end}}"><h2 title="Workloads running an image with a CRITICAL vulnerability">Workloads with CRITICAL</h2><b>{{.WorkloadsCritical}}</b></div>
+  <div class="tile {{if .WorkloadsHigh}}warn{{else}}good{{end}}"><h2 title="Workloads running an image with at least one HIGH vulnerability (those with a CRITICAL too included)">Workloads with HIGH</h2><b>{{.WorkloadsHigh}}</b></div>
+  <div class="tile"><h2 title="Running image digests: scanned, and with a CRITICAL or HIGH vulnerability">Images</h2>
+    <div class="split"><div><small>Scanned</small><b>{{$.Status.ImagesScanned}}</b></div><div><small>Vulnerable</small><b>{{.ImagesVulnerable}}</b></div></div></div>
+  <div class="tile {{if .FixableCriticalHigh}}warn{{else}}good{{end}}"><h2 title="CRITICAL and HIGH vulnerabilities with a fixed version, per image">Fixable CRITICAL + HIGH</h2><b>{{.FixableCriticalHigh}}</b></div>
+  <div class="tile {{vulnAgeTone .DBAgeSeconds}}"><h2>Vulnerability database age</h2>
+    {{- with .DBAgeSeconds}}{{$h := humanAge .}}<b>{{$h.N}}<span>{{$h.Unit}}</span></b>{{else}}<b><span>not ready</span></b>{{end}}</div>
+  <div class="tile wide"><h2>Vulnerabilities by severity</h2>
+    <div class="cells sevs">{{range $.SevCells}}
+      <div class="{{if .N}}{{sevClass .Reason}}{{else}}zero-cell{{end}}">
+        <span class="info" tabindex="0" aria-describedby="tip-{{.Reason}}">i</span>
+        <div class="tip" id="tip-{{.Reason}}" role="tooltip">
+          {{- if .N}}<p>{{.N}} {{.Reason}} {{plural .N "vulnerability" "vulnerabilities"}}, in:</p><ul>{{range .Where}}<li>{{.}}</li>{{end}}</ul>
+          {{- else}}<p>No <strong>{{.Reason}}</strong> vulnerabilities.</p>{{end}}
+        </div>
+        <small>{{.Reason}}</small><b>{{.N}}</b>
+      </div>{{end}}
+    </div></div>
+</div>
+{{- end}}
+
+<div class="pkgs" role="group" aria-label="Vulnerable packages by their worst severity, CRITICAL left. Pick one to filter the vulnerabilities.">
+  {{- range .PkgZones}}
+  <div class="zone {{sevClass .Severity}}">
+    {{- range .Marks}}
+    <button class="mark {{sevClass .Severity}}{{if .On}} on{{end}}{{if .Dim}} dim{{end}}" type="submit" form="filters" name="pick" value="{{.Package}}" aria-pressed="{{.On}}" style="width: {{.Size}}px; height: {{.Size}}px" title="{{.Package}}: {{.N}} {{plural .N "vulnerability" "vulnerabilities"}}, worst {{.Severity}}, in {{join .Workloads ", "}}. Click to filter the table by it, again to clear."></button>
+    {{- end}}
+  </div>
+  {{- end}}
+</div>
+<div class="pkgscale" aria-hidden="true">{{range .PkgZones}}<span><b>{{.Severity}}</b> · {{len .Marks}} {{plural (len .Marks) "package" "packages"}}</span>{{end}}</div>
+
+<section>
+  <h2>Vulnerabilities</h2>
+  <p class="note">One row per workload, CVE and package. Click a column name to sort; use its funnel to filter, or click a package above.</p>
+  <input type="hidden" name="sort" value="{{.Sort}}" form="filters">
+  <div class="table">
+    <table class="findings">
+      <thead>{{template "thead" .Cols}}
+      </thead>
+      <tbody>
+      {{- range .Vulns}}
+        <tr>
+          <td><span class="sev {{sevClass .Severity}}">{{.Severity}}</span></td>
+          <td class="cve">{{if or (hasPrefix .URL "https://") (hasPrefix .URL "http://")}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.Title}}">{{.ID}}</a>{{else}}<span title="{{.Title}}">{{.ID}}</span>{{end}}</td>
+          <td>{{.Package}}</td>
+          <td>{{.Version}}</td>
+          <td class="fixed">{{if .FixedVersion}}{{.FixedVersion}}{{else}}<span class="zero">none</span>{{end}}</td>
+          <td>{{.Namespace}}</td>
+          <td>{{.Kind}}</td>
+          <td>{{.Name}}</td>
+          <td>{{.Image}}</td>
+          <td>{{.Type}}</td>
+          <td>{{.ScannedAt}}</td>
+        </tr>
+      {{- else}}
+        <tr><td colspan="{{len .Cols}}" class="empty">{{if not .Status.Vulnerabilities.DBAgeSeconds}}The vulnerability database is not ready yet; images are scanned once it is downloaded.{{else if or .Filter .ColFiltered (eq .Fixable "only")}}No vulnerabilities match these filters.{{else}}No known vulnerabilities in the scanned images.{{end}}</td></tr>
+      {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{- if gt .VulnsTotal (len .Vulns)}}
+  <p class="note">Showing the first {{len .Vulns}} of {{.VulnsTotal}} rows in this order; narrow them with the filters, or get them all from <a href="/api/v1/vulnerabilities">/api/v1/vulnerabilities</a>.</p>
+  {{- end}}
+</section>
+
+<div class="pair">
+  <section>
+    <h2>Workloads</h2>
+    <p class="note">Every scanned workload, worst first. Counts are per image the workload runs.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Workload</th><th class="num">Critical</th><th class="num">High</th><th class="num">Fixable</th></tr></thead>
+        <tbody>
+        {{- range .Workloads}}
+          <tr><td class="wl">{{.Name}}<small>{{.Kind}} in {{.Namespace}}</small></td>
+            <td class="num">{{if .VulnCritical}}<span class="pill crit">{{.VulnCritical}}</span>{{else}}<span class="zero">0</span>{{end}}</td>
+            <td class="num">{{if .VulnHigh}}<span class="pill high">{{.VulnHigh}}</span>{{else}}<span class="zero">0</span>{{end}}</td>
+            <td class="num">{{if .VulnFixable}}{{.VulnFixable}}{{else}}<span class="zero">0</span>{{end}}</td></tr>
+        {{- else}}
+          <tr><td colspan="4" class="empty">No workloads match these filters.</td></tr>
+        {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2>Namespaces</h2>
+    <p class="note">Workloads with CRITICAL or HIGH vulnerabilities, out of all scanned.</p>
+    <div class="table">
+      <table>
+        <thead><tr><th>Namespace</th><th class="num">Affected</th><th class="num">Critical</th><th class="num">High</th></tr></thead>
+        <tbody>
+        {{- range .ByNS}}
+          <tr><td>{{.Namespace}}</td><td class="num">{{.WorkloadsVulnerable}} / {{.Workloads}}</td>
+            <td class="num">{{if .VulnCritical}}<span class="pill crit">{{.VulnCritical}}</span>{{else}}<span class="zero">0</span>{{end}}</td>
+            <td class="num">{{if .VulnHigh}}<span class="pill high">{{.VulnHigh}}</span>{{else}}<span class="zero">0</span>{{end}}</td></tr>
+        {{- else}}
+          <tr><td colspan="4" class="empty">No namespaces match these filters.</td></tr>
+        {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<footer>
+  {{- with .Status.Vulnerabilities}}{{if .DBUpdated}}Vulnerability data from trivy's database, published {{.DBUpdated}} ({{hours .DBAgeSeconds}} hours ago).{{else}}The vulnerability database is not ready yet.{{end}}{{end}}
+  Current state only; Refresh to update.
+</footer>
 {{end}}

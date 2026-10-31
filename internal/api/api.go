@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package api serves the operator's current EOL findings as JSON, for Grafana (Infinity datasource)
+// Package api serves the operator's current EOL findings and vulnerabilities as JSON, for Grafana (Infinity datasource)
 // or any HTTP client. Everything is computed from the in-memory inventory on each request: it is
 // always the current state, with no history.
 package api
@@ -32,17 +32,23 @@ import (
 	"time"
 
 	"github.com/Rishang/xeol-operator/internal/controller"
+	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
 // DefaultWithinDays is the "EOL soon" window when within_days isn't given.
 const DefaultWithinDays = 180
 
-// Handler serves /api/v1/{status,namespaces,workloads,findings}.
+// Handler serves /api/v1/{status,namespaces,workloads,findings,vulnerabilities}.
 type Handler struct {
 	Inventory *controller.Inventory
-	// Config supplies spec.ignoreProducts; nil ignores nothing.
+	// Config supplies the config file's ignoreProducts; nil ignores nothing.
 	Config  *controller.Config
 	DBBuilt func() (time.Time, error)
+	// EOL is --eol: /findings and the EOL fields are served.
+	EOL bool
+	// Trivy is --trivy: /vulnerabilities and the vulnerability fields are served.
+	Trivy         bool
+	VulnDBUpdated func() (time.Time, error)
 	// Leader reports whether this replica holds the inventory; others answer 503 so a client behind
 	// the Service never gets an empty answer from a standby.
 	Leader func() bool
@@ -67,8 +73,14 @@ func (h *Handler) Routes() map[string]http.Handler {
 }
 
 func (h *Handler) endpoints() map[string]func(query) any {
-	return map[string]func(query) any{"status": h.status, "namespaces": h.namespaces,
-		"workloads": h.workloads, "findings": h.findings}
+	e := map[string]func(query) any{"status": h.status, "namespaces": h.namespaces, "workloads": h.workloads}
+	if h.EOL {
+		e["findings"] = h.findings
+	}
+	if h.Trivy {
+		e["vulnerabilities"] = h.vulnerabilities
+	}
+	return e
 }
 
 // leaderOnly answers 503 on a standby: only the leader holds the inventory.
@@ -101,6 +113,7 @@ func (h *Handler) wrap(fn func(q query) any) http.Handler {
 type query struct {
 	namespaces, kinds map[string]bool // empty = all
 	withinDays        int
+	severities        map[string]bool // vulnerabilities only; empty = all
 }
 
 var errWithinDays = errors.New("within_days must be a non-negative integer")
@@ -124,7 +137,12 @@ func parseQuery(r *http.Request) (query, error) {
 		}
 		days = n
 	}
-	return newQuery(v.Get("namespace"), v.Get("kind"), days)
+	q, err := newQuery(v.Get("namespace"), v.Get("kind"), days)
+	q.severities = map[string]bool{}
+	for sev := range set(v.Get("severity")) { // after set(): "All" means no filter
+		q.severities[strings.ToUpper(sev)] = true
+	}
+	return q, err
 }
 
 func set(csv string) map[string]bool {
@@ -209,7 +227,91 @@ type WorkloadRow struct {
 	Name      string `json:"name"`
 	EOLNow    int    `json:"eol_now"`
 	EOLSoon   int    `json:"eol_soon"`
+	// Vulnerability counts over the workload's images; omitted with vulnerability scanning off.
+	*VulnCounts
 }
+
+// VulnCounts are a workload's vulnerability counts over its images. Rows hold them as an embedded
+// pointer that is nil with vulnerability scanning off, so the JSON fields are left out then.
+type VulnCounts struct {
+	VulnCritical int `json:"vuln_critical"`
+	VulnHigh     int `json:"vuln_high"`
+	VulnFixable  int `json:"vuln_fixable"` // any severity with a fixed version
+}
+
+// newVulnCounts is the one place the rows depend on the scan types: nil without trivy.
+func (h *Handler) newVulnCounts() *VulnCounts {
+	if !h.Trivy {
+		return nil
+	}
+	return &VulnCounts{}
+}
+
+// add counts one image's vulnerabilities; a no-op on nil.
+func (c *VulnCounts) add(t scanner.VulnTally) {
+	if c != nil {
+		c.VulnCritical += t.Severity(sevCritical)
+		c.VulnHigh += t.Severity(sevHigh)
+		c.VulnFixable += t.Fixable()
+	}
+}
+
+// critical and high read nil as zero, for sorting.
+func (c *VulnCounts) critical() int {
+	if c == nil {
+		return 0
+	}
+	return c.VulnCritical
+}
+
+func (c *VulnCounts) high() int {
+	if c == nil {
+		return 0
+	}
+	return c.VulnHigh
+}
+
+// worstFirst orders by CRITICAL count, then HIGH count, highest first.
+func (c *VulnCounts) worstFirst(o *VulnCounts) int {
+	return cmp.Or(cmp.Compare(o.critical(), c.critical()), cmp.Compare(o.high(), c.high()))
+}
+
+// NamespaceVulns are a namespace's vulnerability counts; nil without trivy, like VulnCounts.
+type NamespaceVulns struct {
+	// WorkloadsVulnerable counts workloads with a CRITICAL or HIGH vulnerability.
+	WorkloadsVulnerable int `json:"workloads_vulnerable"`
+	VulnCounts
+}
+
+// vulnCounts is nil without trivy.
+func (r NamespaceRow) vulnCounts() *VulnCounts {
+	if r.NamespaceVulns == nil {
+		return nil
+	}
+	return &r.VulnCounts
+}
+
+// add counts one workload; a no-op on nil.
+func (n *NamespaceVulns) add(w *VulnCounts) {
+	if n == nil || w == nil {
+		return
+	}
+	n.VulnCritical += w.VulnCritical
+	n.VulnHigh += w.VulnHigh
+	n.VulnFixable += w.VulnFixable
+	if w.VulnCritical+w.VulnHigh > 0 {
+		n.WorkloadsVulnerable++
+	}
+}
+
+// ageSeconds is a database's age in whole seconds.
+func ageSeconds(now, t time.Time) *float64 {
+	age := math.Round(now.Sub(t).Seconds())
+	return &age
+}
+
+// workloadKey identifies a workload across images.
+func workloadKey(namespace, kind, name string) string { return namespace + "/" + kind + "/" + name }
 
 // workloadRows takes the snapshot the rows came from, so every row's workload is in it.
 func (h *Handler) workloadRows(q query, imgs []controller.Image, rows []FindingRow) []WorkloadRow {
@@ -219,14 +321,17 @@ func (h *Handler) workloadRows(q query, imgs []controller.Image, rows []FindingR
 			if !q.match(w) {
 				continue
 			}
-			k := w.Namespace + "/" + w.Kind + "/" + w.Name
-			if byKey[k] == nil {
-				byKey[k] = &WorkloadRow{Namespace: w.Namespace, Kind: w.Kind, Name: w.Name}
+			k := workloadKey(w.Namespace, w.Kind, w.Name)
+			wr := byKey[k]
+			if wr == nil {
+				wr = &WorkloadRow{Namespace: w.Namespace, Kind: w.Kind, Name: w.Name, VulnCounts: h.newVulnCounts()}
+				byKey[k] = wr
 			}
+			wr.add(scanner.CountVulns(img.Vulns)) // one workload can run several images
 		}
 	}
 	for _, r := range rows {
-		wr := byKey[r.Namespace+"/"+r.Kind+"/"+r.Name]
+		wr := byKey[workloadKey(r.Namespace, r.Kind, r.Name)]
 		switch d := daysLeft(r); {
 		case d < 0:
 			wr.EOLNow++
@@ -240,6 +345,7 @@ func (h *Handler) workloadRows(q query, imgs []controller.Image, rows []FindingR
 	}
 	slices.SortFunc(out, func(a, b WorkloadRow) int {
 		return cmp.Or(cmp.Compare(b.EOLNow, a.EOLNow), cmp.Compare(b.EOLSoon, a.EOLSoon),
+			a.worstFirst(b.VulnCounts),
 			cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
 	return out
@@ -258,6 +364,8 @@ type NamespaceRow struct {
 	WorkloadsEOL int    `json:"workloads_eol"`
 	EOLNow       int    `json:"eol_now"`
 	EOLSoon      int    `json:"eol_soon"`
+	// Omitted with vulnerability scanning off.
+	*NamespaceVulns
 }
 
 func (h *Handler) namespaces(q query) any {
@@ -267,6 +375,9 @@ func (h *Handler) namespaces(q query) any {
 		n := byNS[w.Namespace]
 		if n == nil {
 			n = &NamespaceRow{Namespace: w.Namespace}
+			if w.VulnCounts != nil { // vulnerability scanning on
+				n.NamespaceVulns = &NamespaceVulns{}
+			}
 			byNS[w.Namespace] = n
 		}
 		n.Workloads++
@@ -275,13 +386,15 @@ func (h *Handler) namespaces(q query) any {
 		if w.EOLNow > 0 {
 			n.WorkloadsEOL++
 		}
+		n.add(w.VulnCounts)
 	}
 	out := make([]NamespaceRow, 0, len(byNS))
 	for _, n := range byNS {
 		out = append(out, *n)
 	}
 	slices.SortFunc(out, func(a, b NamespaceRow) int {
-		return cmp.Or(cmp.Compare(b.EOLNow, a.EOLNow), cmp.Compare(a.Namespace, b.Namespace))
+		return cmp.Or(cmp.Compare(b.EOLNow, a.EOLNow), cmp.Compare(b.vulnCounts().critical(), a.vulnCounts().critical()),
+			cmp.Compare(a.Namespace, b.Namespace))
 	})
 	return out
 }
@@ -298,13 +411,38 @@ type Status struct {
 	DBAgeSeconds       *float64       `json:"db_age_seconds"`
 	FailedScans        int            `json:"failed_scans"`
 	FailedScansByCause map[string]int `json:"failed_scans_by_reason"`
-	WithinDays         int            `json:"within_days"`
+	// LastSweep is the oldest scan once every tracked image has one (RFC 3339): every running image was
+	// scanned at least since then. Empty while some image is still waiting for its first scan.
+	LastSweep string `json:"last_sweep"`
+	// ConfigError is why the config file was last rejected; the previous config is in use until it is fixed.
+	ConfigError  string `json:"config_error"`
+	WithinDays   int    `json:"within_days"`
+	EOLEnabled   bool   `json:"eol_enabled"`
+	TrivyEnabled bool   `json:"trivy_enabled"`
+	// Vulnerabilities is omitted with vulnerability scanning off.
+	Vulnerabilities *VulnStatus `json:"vulnerabilities,omitempty"`
+}
+
+// VulnStatus is the vulnerability headline numbers. Counts are unique (CVE, package) rows per image
+// digest, as in the xeol_vulnerabilities metric, so replicas don't multiply them.
+type VulnStatus struct {
+	BySeverity          map[string]int `json:"by_severity"`
+	WorkloadsCritical   int            `json:"workloads_critical"`
+	WorkloadsHigh       int            `json:"workloads_high"`    // with a HIGH, whether or not they also have a CRITICAL
+	ImagesVulnerable    int            `json:"images_vulnerable"` // with a CRITICAL or HIGH, like workloads_vulnerable
+	FixableCriticalHigh int            `json:"fixable_critical_high"`
+	DBUpdated           string         `json:"db_updated"`
+	DBAgeSeconds        *float64       `json:"db_age_seconds"`
 }
 
 func (h *Handler) status(q query) any {
 	now := h.Now()
-	s := Status{FailedScansByCause: map[string]int{}, WithinDays: q.withinDays}
+	s := Status{FailedScansByCause: map[string]int{}, WithinDays: q.withinDays, EOLEnabled: h.EOL, TrivyEnabled: h.Trivy}
 	imgs := h.Inventory.Images()
+	if h.Trivy {
+		s.Vulnerabilities = h.vulnStatus(q, imgs, now)
+	}
+	var oldest time.Time
 	for _, img := range imgs {
 		if !slices.ContainsFunc(img.Workloads, q.match) {
 			continue
@@ -312,6 +450,9 @@ func (h *Handler) status(q query) any {
 		s.ImagesTracked++
 		if !img.Scanned.IsZero() {
 			s.ImagesScanned++
+			if oldest.IsZero() || img.Scanned.Before(oldest) {
+				oldest = img.Scanned
+			}
 		}
 		if img.ErrReason != "" {
 			s.FailedScans++
@@ -333,9 +474,15 @@ func (h *Handler) status(q query) any {
 		}
 	}
 	if built, err := h.DBBuilt(); err == nil {
-		s.DBBuilt = built.UTC().Format(time.RFC3339)
-		age := math.Round(now.Sub(built).Seconds())
-		s.DBAgeSeconds = &age
+		s.DBBuilt, s.DBAgeSeconds = built.UTC().Format(time.RFC3339), ageSeconds(now, built)
+	}
+	if s.ImagesScanned > 0 && s.ImagesScanned == s.ImagesTracked {
+		s.LastSweep = oldest.UTC().Format(time.RFC3339)
+	}
+	if h.Config != nil {
+		if err := h.Config.Err(); err != nil {
+			s.ConfigError = err.Error()
+		}
 	}
 	return s
 }

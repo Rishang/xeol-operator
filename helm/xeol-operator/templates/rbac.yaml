@@ -18,12 +18,6 @@ rules:
   - apiGroups: [batch]
     resources: [cronjobs, jobs]
     verbs: [get, list, watch]
-  - apiGroups: [xeol.io]
-    resources: [xeolscanners]
-    verbs: [get, list, watch]
-  - apiGroups: [xeol.io]
-    resources: [xeolscanners/status]
-    verbs: [get, patch, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

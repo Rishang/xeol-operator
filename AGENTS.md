@@ -11,14 +11,15 @@ cluster workloads ──> operator collects images ──> xeol scan ──> /me
 ## Scope
 
 In:
-- Discover images from running Pods (all namespaces, or those selected by the CR).
+- Discover images from running Pods (all namespaces, or those selected in the config file).
 - Scan each unique image digest with xeol, cache results by digest, rescan on an interval.
 - Export findings on a Prometheus `/metrics` endpoint, plus alert rules.
+- Optional vulnerability scan (`trivy.enabled`, off by default): trivy matches the CycloneDX SBOM from the same syft run. EOL scanning can be switched off (`eol.enabled`); at least one stays on.
 - Ship a Helm chart (`helm/xeol-operator`) with an optional ServiceMonitor, PrometheusRule and Grafana dashboard.
 - For clusters without Grafana: an optional built-in HTML UI (`ui.enabled`) and MCP over HTTP (`mcp.enabled`).
 
 Out (until asked for):
-- Vulnerability scanning (that's grype/trivy).
+- Vulnerability scanning beyond `trivy sbom` on the syft SBOM: no `trivy image` scans (`trivy image --download-db-only` only fetches the DB, `internal/vulndb`), no secret/misconfig/license scanners, no vulnerability ignore rules or VEX.
 - An external database, or pushing to Grafana. Grafana reads Prometheus and the operator's JSON API.
 - Auth, Ingress or write actions for the built-in UI/MCP.
 - Webhooks or admission control that block EOL images.
@@ -26,50 +27,39 @@ Out (until asked for):
 ## Stack
 
 - Go, [kubebuilder](https://book.kubebuilder.io/) / controller-runtime layout.
-- syft and xeol run as binaries (both bundled in the operator image): syft writes the SBOM, xeol matches it with `-o json`. Shell out, parse the JSON. Don't vendor xeol or syft as libraries unless the CLIs can't do the job.
+- syft, xeol and trivy run as binaries (all bundled in the operator image): syft writes the SBOM once (syft-json for xeol, CycloneDX for trivy), xeol and `trivy sbom` match it with JSON output. Shell out, parse the JSON. Don't vendor them as libraries unless the CLIs can't do the job.
 - Metrics through controller-runtime's built-in Prometheus registry (`sigs.k8s.io/controller-runtime/pkg/metrics`). No separate exporter process.
 - Taskfile (`Taskfile.yml`) is the task runner. It replaces kubebuilder's Makefile; add targets there rather than documenting raw commands.
 
 ## Decisions (2026-10-26)
 
 Recorded in `.local/plan/xeol-operator-mvp.plan.html`.
-- **Scanner:** xeol behind a boundary. `internal/scanner` returns flat `Finding` rows; nothing xeol-specific leaks past it.
+- **Scanner:** xeol and trivy behind a boundary. `internal/scanner` returns a `Result` of flat `Finding` and `Vuln` rows; nothing xeol- or trivy-specific leaks past it.
 - **EOL data:** the operator builds xeol's DB itself from [endoflife.date](https://endoflife.date/api/v1/products/full) (xeol's own DB stopped updating 2026-09-02 and never matched distros). xeol is only the matcher. Never contact `data.xeol.io`.
-- **Export:** Prometheus `/metrics` for alerts, plus a read-only JSON API (`/api/v1/{status,namespaces,workloads,findings}`, `internal/api`) on the metrics port for the Grafana dashboard via the Infinity datasource (D5, 2026-10-27). Both read the in-memory inventory. No Loki, no external database.
-- **UI and MCP (2026-10-27):** `--ui` serves a server-rendered page (`internal/api/ui/page.html`, Go `html/template`) at `/`; htmx 2.0.4 from jsDelivr (pinned, SRI) swaps in `/ui/report` on filter changes (and the Refresh button), and without it the filters form does a plain reload; `--mcp` serves the same four endpoints as read-only MCP tools at `/mcp` (official Go SDK, stateless Streamable HTTP, cross-origin protected). Same port, no auth, off by default; non-leaders answer 503.
+- **Export:** Prometheus `/metrics` for alerts, plus a read-only JSON API (`/api/v1/{status,namespaces,workloads,findings,vulnerabilities}`, `internal/api`) on the metrics port for the Grafana dashboard via the Infinity datasource (D5, 2026-10-27). Both read the in-memory inventory. No Loki, no external database.
+- **UI and MCP (2026-10-27):** `--ui` serves a server-rendered page (`internal/api/ui/page.html`, Go `html/template`) at `/`; htmx 2.0.4 from jsDelivr (pinned, SRI) swaps in `/ui/report` on filter changes (and the Refresh button), and without it the filters form does a plain reload; `--mcp` serves `status`, `namespaces`, `workloads` and `findings` (not `vulnerabilities` yet) as read-only MCP tools at `/mcp` (official Go SDK, stateless Streamable HTTP, cross-origin protected). Same port, no auth, off by default; non-leaders answer 503.
 - **Lookahead:** always scan with `-l 10y`; export the EOL date as the metric value. "How close counts" is a PromQL threshold, not operator config.
 - **Stale DB:** disable xeol's age check (`XEOL_DB_VALIDATE_AGE=false`), export `xeol_db_built_timestamp_seconds`, alert on age.
 
-## API (initial)
+## Configuration (2026-10-31: replaced the XeolScanner CRD)
 
-One singleton CRD `XeolScanner` (`name: default`):
+One YAML file, `--config` (default `/etc/xeol-operator/config.yaml`), parsed strictly into `internal/config.Config` (Go struct = the schema; unknown fields and bad values are errors). The chart renders it from `scanner.*` values into the ConfigMap `<release>-config`, mounted without `subPath`; `config.Watcher` re-reads it every 5 s and applies a changed file without a restart. A bad file at startup exits; a bad edit later keeps the previous config, is logged, and shows as `config_error` in `/api/v1/status`. Missing file = defaults. No CRD, no CR status: progress and health are `/api/v1/status` (incl. `last_sweep`), metrics and readiness.
 
 ```yaml
-apiVersion: xeol.io/v1alpha1
-kind: XeolScanner
-metadata:
-  name: default
-spec:
-  namespaceSelector: {}        # empty = all namespaces
-  excludeNamespaces: [kube-*]  # globs
-  excludeImages: []            # globs on image ref
-  interval: 24h                # rescan each image digest this often
-  workloadKinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]  # default; [] = every kind
-  workloadLabels: [team]       # copied onto metrics as k8s_label_<name>
-  ignoreProducts:              # hide accepted findings at export time (no rescan)
-    - products: [perl]         # endoflife.date slugs; optional cycles, namespaces, selector (workload labels)
-      namespaces: [test]
-status:
-  lastSweepTime: ...
-  imagesScanned: 42
-  eolFindings: 7
-  dbBuilt: ...
-  conditions: []               # Ready, DBStale
+namespaceSelector: {}        # empty = all namespaces
+excludeNamespaces: [kube-*]  # globs
+excludeImages: []            # globs on image ref
+interval: 24h                # rescan each image digest this often
+workloadKinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]  # default when absent; [] = every kind
+workloadLabels: [team]       # copied onto metrics as k8s_label_<name>
+ignoreProducts:              # hide accepted findings at export time (no rescan)
+  - products: [perl]         # endoflife.date slugs; optional cycles, namespaces, selector (workload labels)
+    namespaces: [test]
 ```
 
 Globs (`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces`): only `*` (anything, `/` included) and `?` (one character) are special; every string is a valid glob.
 
-Pod-level settings are operator flags set by Helm, not CR fields: `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`.
+Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`.
 
 Add fields only when a real use case needs them.
 
@@ -82,6 +72,8 @@ Prefix `xeol_`. Keep label cardinality bounded: one series per (digest, product,
 | `xeol_eol_date_seconds` | gauge, value = EOL date (unix) | `image`, `digest`, `product`, `cycle`, `package`, `version`, `url` (endoflife.date page) |
 | `xeol_image_workload` | gauge (1) | `digest`, `namespace`, `kind`, `name`, `k8s_label_*` (join in Grafana) |
 | `xeol_db_built_timestamp_seconds` | gauge | — |
+| `xeol_vulnerabilities` | gauge, value = count (`--trivy`) | `digest`, `severity`, `fixable` (never per CVE; CVEs are in `/api/v1/vulnerabilities`) |
+| `xeol_vuln_db_updated_timestamp_seconds` | gauge (`--trivy`) | — |
 | `xeol_scan_duration_seconds` | histogram | — |
 | `xeol_scan_errors_total` | counter | `reason` |
 
@@ -103,23 +95,25 @@ A custom `prometheus.Collector` reads the in-memory cache on each scrape, so ima
                                 │  new digest, or lastScan older than interval
                                 ▼
                          Scan queue (workqueue, keyed by digest, N workers)
-                                │  exec: syft scan registry:<repo>@<digest> -o syft-json=sbom.json
-                                │        xeol sbom:sbom.json -o json -q -l 10y
+                                │  exec: syft scan registry:<repo>@<digest> -o syft-json=sbom.json [-o cyclonedx-json=sbom.cdx.json]
+                                │        xeol sbom:sbom.json -o json -q -l 10y            (--eol, default on)
+                                │        trivy sbom sbom.cdx.json --scanners vuln -f json  (--trivy, default off)
                                 ▼
-                         Result cache  digest -> {findings, scannedAt, err}
+                         Result cache  digest -> {findings, vulns, scannedAt, err}
                                 │
                                 ▼
            Prometheus  <──  /metrics (Collector reads Inventory + cache)  ──> alerts
            Grafana     <──  /api/v1/* JSON (Infinity datasource, same port)
 
  DB builder (ticker, daily): endoflife.date → xeol.db → shared cache dir on emptyDir
+ Vuln DB (--trivy, daily):    trivy --download-db-only → <trivy-db-dir>/current on emptyDir
 ```
 
 - **Image identity:** scan by the digest in `pod.status.containerStatuses[].imageID`, not the tag, so results match what actually runs. Dedupe by digest across the cluster.
 - **Scan execution:** in-process `exec`, one worker by default, two steps per image: the bundled syft catalogs the image into an SBOM (xeol's cataloger selection, `catalogers` in `internal/scanner/xeol.go`), then xeol matches `sbom:<file>`. xeol v0.10.8's built-in syft v1.10 needs over twice the memory (grafana: 1.6 GB vs 0.78 GB, same findings). The operator only bounds the cost (memory limit, `GOMEMLIMIT`, `GOMAXPROCS=2`, timeout), never reimplements cataloging. An image that OOM-kills the pod leaves an in-flight marker on the state emptyDir; it is skipped for 24h as `reason="oom"` instead of crash-looping.
 - **Registry auth:** per scan, a temp `config.json` from the Pod's (and its ServiceAccount's) `imagePullSecrets` in an `emptyDir` as `DOCKER_CONFIG`, deleted after.
-- **EOL DB (`--db-source=online`):** `internal/eoldb` builds xeol's DB from endoflife.date at startup and daily; readiness waits for the first good DB. Scans run with `XEOL_DB_AUTO_UPDATE=false`. A build swaps in only when complete: a failed rebuild keeps the old DB, logs it, and retries next day (every 30s if there is no usable DB). `--db-source=mounted` reads a read-only volume instead (air-gapped, `docs/air-gapped.md`).
-- **Rescans:** each digest `spec.interval` after its own last scan; a DB rebuild triggers none (decided 2026-10-27, avoids bunching scans). Results hold the EOL date and "already EOL" is computed at query time, so only endoflife.date data changes wait for a rescan (≤ ~2× interval).
+- **EOL DB (`--db-source=online`):** `internal/eoldb` builds xeol's DB from endoflife.date at startup and daily; readiness waits for the first good DB. Scans run with `XEOL_DB_AUTO_UPDATE=false`. A build swaps in only when complete: a failed rebuild keeps the old DB, logs it, and retries next day (every 30s if there is no usable DB). `--db-source=mounted` reads a read-only volume instead (air-gapped, `ui/src/content/docs/air-gapped.mdx`).
+- **Rescans:** each digest `interval` after its own last scan; a DB rebuild triggers none (decided 2026-10-27, avoids bunching scans). Results hold the EOL date and "already EOL" is computed at query time, so only endoflife.date data changes wait for a rescan (≤ ~2× interval).
 - **State:** inventory in memory; each digest's last scan also in SQLite (`<state-dir>/results.db`, `internal/results`) on the state emptyDir, so after a container restart (e.g. OOM) a re-seen digest is restored and rescanned only if overdue. A new pod starts fresh.
 
 ## xeol CLI facts (verified against v0.10.8)
@@ -147,24 +141,29 @@ Changes go through [OpenSpec](https://github.com/Fission-AI/OpenSpec): `/opsx:pr
 ## Conventions
 
 - Pin the xeol and syft versions in the Dockerfile. On an xeol bump, re-check the "xeol CLI facts" section, the `catalogers` list (xeol's `getProviderConfig`) and refresh `testdata/` fixtures. xeol v0.10.8 reads syft-json schema 16.x SBOMs (verified with syft v1.55.0).
+- Pin trivy in the Dockerfile too. On a trivy bump, re-check the CycloneDX fix-up property names (`aquasecurity:trivy:SrcName/SrcVersion/SrcRelease`, `internal/scanner/trivy.go`), run `task test-trivy TRIVY_DB_DIR=<dir with db/trivy.db>`, and refresh the trivy `testdata/` fixtures. Scans never update the trivy DB or call out (`--skip-db-update --skip-java-db-update --offline-scan --skip-version-check --disable-telemetry`); only the main DB is used, not the Java DB.
 - Reconcile is idempotent; scans run off the reconcile loop through a bounded worker queue keyed by digest.
 - Private registries: reuse the Pod's `imagePullSecrets`. Never log credentials.
 - Run as non-root, read-only root filesystem; xeol's DB cache goes on an `emptyDir` (or PVC if configured).
-- RBAC: read-only, nothing more: Pods, namespaces, nodes (platform), ServiceAccounts and Secrets (pull secrets), workload kinds (owner walk), plus the CRD.
-- Tests: envtest for the controller, a fixture-based test for the xeol JSON parser. e2e (`task test-e2e`) is a smoke test: Helm install into k3d (no traefik) under restricted PSA, wait for Ready. Keep the parser test fed with real xeol output saved under `testdata/`.
+- RBAC: read-only, nothing more: Pods, namespaces, nodes (platform), ServiceAccounts and Secrets (pull secrets), workload kinds (owner walk). No CRD; the config file is a mounted volume, so it needs no API access.
+- Tests: envtest for the controller, a fixture-based test for the xeol JSON parser. e2e (`task test-e2e`) is a smoke test: Helm install into k3d (no traefik) under restricted PSA, wait for Ready. Fixtures in `internal/scanner/testdata/` are real syft (CycloneDX), xeol and trivy output, kept locally only: the directory is gitignored except `.gitkeep`, and fixture tests skip when a file is missing. Regenerate them from the test images (`node:16-alpine`, `python:3.8-slim`, `python:3.12-slim`) with the operator's cataloger list.
 
 ## Layout
 
 ```
-api/v1alpha1/        CRD types
-internal/controller/ reconciler
-internal/scanner/    xeol exec + JSON parsing, scan queue
+internal/config/     config file struct, strict load, file watcher (live reload)
+internal/controller/ Pod reconciler, inventory, live config snapshot
+internal/scanner/    syft, xeol and trivy exec + JSON parsing, scan queue
 internal/eoldb/      build xeol.db from endoflife.date, DB manager
+internal/vulndb/     download trivy's vulnerability DB, DB manager (--trivy)
+internal/dbloop/     refresh/readiness loop and atomic swap shared by both DB managers
 internal/metrics/    metric definitions and updates
 internal/api/        JSON API for Grafana (Infinity), HTML UI (`ui/page.html`, htmx), MCP tools
 internal/results/    SQLite store of each digest's last scan
 config/              kustomize manifests (kubebuilder, dev only)
-helm/xeol-operator/  Helm chart: supported install, CRD copy, alert rules, dashboards/xeol.json
+helm/xeol-operator/  Helm chart: supported install, config ConfigMap, alert rules, dashboards/xeol.json and xeol-trivy.json
+ui/                  docs site (Astro Starlight): guides in src/content/docs/*.mdx, published to GitHub Pages
+.github/workflows/   ci.yml, release.yml (image to Docker Hub, chart attached to the release), pages.yml (docs + Helm repo)
 Taskfile.yml
 ```
 
@@ -176,6 +175,13 @@ Taskfile.yml
 - kube-prometheus-stack (namespace `monitoring`, release `kube-prom-stack`) picks up ServiceMonitors, PrometheusRules and dashboard ConfigMaps from any namespace.
 - Fresh setup: `task cluster-up` (k3d cluster, kube-prometheus-stack, EOL test apps in namespace `test`, operator). Redeploy the operator with `task deploy-dev -- -f test/dev-values.yaml`.
 - Images loaded with `k3d image import` have no registry digest (`imageID: sha256:...`), so the operator skips them; that includes the operator itself.
+
+## Docs and releases
+
+- `ui/` uses pnpm (version in `ui/package.json` `packageManager`, lockfile `pnpm-lock.yaml`), locally and in `pages.yml`; not npm.
+- The guides live only in `ui/src/content/docs/*.mdx` (Astro Starlight; `docs/` is gone). Link between them as `/xeol-operator/<page>/#<anchor>`; `task docs-build` fails on broken internal links. Keep the README as the GitHub landing page and link it to the site, not to files.
+- Publishing a GitHub release `vX.Y.Z`: `release.yml` pushes `docker.io/rishang/xeol-operator:vX.Y.Z` and `:X.Y.Z`, then packages the chart as version/appVersion `X.Y.Z`, attaches the `.tgz` to the release, and calls `pages.yml`.
+- `pages.yml` builds the site and the Helm repository together (`https://rishang.github.io/xeol-operator`: `index.yaml` from every release's chart asset, `charts/`, `artifacthub-repo.yml`). Nothing lives in a `gh-pages` branch. The site also serves `/llms.txt`, `/llms-small.txt` and `/llms-full.txt`, generated from the guides by `starlight-llms-txt` (pinned in `ui/package.json`). It also runs on pushes to `main` that touch `ui/`.
 
 ## Git
 

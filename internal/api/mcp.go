@@ -42,6 +42,9 @@ var toolDescriptions = map[string]string{
 func (h *Handler) mcp() http.Handler {
 	s := mcp.NewServer(&mcp.Implementation{Name: "xeol-operator", Version: "v1"}, nil)
 	for name, fn := range h.endpoints() {
+		if name == "vulnerabilities" {
+			continue // a follow-up: it needs a description and a severity input, and returns a row per CVE
+		}
 		mcp.AddTool(s, &mcp.Tool{Name: name, Description: toolDescriptions[name],
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 			func(_ context.Context, _ *mcp.CallToolRequest, in toolInput) (*mcp.CallToolResult, any, error) {

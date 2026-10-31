@@ -1,0 +1,31 @@
+# The scan config file (--config), from scanner.* values. Mounted without subPath, so the kubelet keeps the
+# file current and the operator reloads it in place: editing this ConfigMap (or helm upgrade) needs no restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "xeol-operator.fullname" . }}-config
+  labels: {{- include "xeol-operator.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- with .Values.scanner.namespaceSelector }}
+    namespaceSelector: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scanner.excludeNamespaces }}
+    excludeNamespaces: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scanner.excludeImages }}
+    excludeImages: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scanner.interval }}
+    interval: {{ . | quote }}
+    {{- end }}
+    {{- /* null (the default) leaves the field out: the operator's default kinds. [] means every kind. */}}
+    {{- if kindIs "slice" .Values.scanner.workloadKinds }}
+    workloadKinds: {{- toYaml .Values.scanner.workloadKinds | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scanner.workloadLabels }}
+    workloadLabels: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.scanner.ignoreProducts }}
+    ignoreProducts: {{- toYaml . | nindent 6 }}
+    {{- end }}

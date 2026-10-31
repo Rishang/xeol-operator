@@ -1,0 +1,154 @@
+/* VitePress default theme look on top of Starlight: Inter, indigo brand, tinted sidebar, quiet header,
+   text-only active items, a rule above h2. Starlight's dark palette is :root, light is [data-theme='light']. */
+
+:root {
+	--sl-font: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: ui-monospace, 'SFMono-Regular', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+	--sl-text-h1: 2rem;
+	--sl-text-h2: 1.5rem;
+	--sl-text-h3: 1.25rem;
+	--sl-content-width: 48rem;
+	--sl-sidebar-width: 17.5rem;
+
+	/* dark */
+	--sl-color-accent-low: #2f3266;
+	--sl-color-accent: #a8b1ff;
+	--sl-color-accent-high: #c9cffd;
+	--sl-color-white: #dfdfd6;
+	--sl-color-gray-1: #dfdfd6;
+	--sl-color-gray-2: #c2c2c4;
+	--sl-color-gray-3: #98989f;
+	--sl-color-gray-4: #6a6a71;
+	--sl-color-gray-5: #3c3f44;
+	--sl-color-gray-6: #202127;
+	--sl-color-black: #1b1b1f;
+	--xo-sidebar-bg: #161618;
+	--xo-divider: #2e2e32;
+	--xo-code-bg: rgba(101, 117, 133, 0.16);
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #e0e4fd;
+	--sl-color-accent: #3451b2;
+	--sl-color-accent-high: #2a3f8f;
+	--sl-color-white: #3c3c43;
+	--sl-color-gray-1: #3c3c43;
+	--sl-color-gray-2: #4a4a52;
+	--sl-color-gray-3: #67676c;
+	--sl-color-gray-4: #929295;
+	--sl-color-gray-5: #c2c2c4;
+	--sl-color-gray-6: #ebebef;
+	--sl-color-gray-7: #f6f6f7;
+	--sl-color-black: #ffffff;
+	--xo-sidebar-bg: #f6f6f7;
+	--xo-divider: #e2e2e3;
+	--xo-code-bg: rgba(142, 150, 170, 0.14);
+}
+
+/* Header: page background, hairline divider, plain site title. */
+header.header {
+	background-color: var(--sl-color-black);
+	border-bottom-color: var(--xo-divider);
+}
+.site-title {
+	color: var(--sl-color-white);
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+/* Sidebar: tinted pane, bold group labels, active page as accent text (no filled pill). */
+.sidebar-pane {
+	background-color: var(--xo-sidebar-bg);
+	border-inline-end-color: var(--xo-divider);
+}
+.sidebar-content .group-label .large {
+	font-size: 0.875rem;
+	font-weight: 700;
+	color: var(--sl-color-white);
+}
+.sidebar-content a {
+	font-size: 0.875rem;
+	color: var(--sl-color-gray-3);
+}
+.sidebar-content a:hover {
+	color: var(--sl-color-accent);
+}
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+	background-color: transparent;
+	color: var(--sl-color-accent);
+	font-weight: 500;
+}
+.sidebar-content ul ul,
+.sidebar-content ul ul li {
+	border-inline-start: 0;
+}
+
+/* Content: VitePress heading weights, a rule above each h2, quieter page title area. */
+.content-panel {
+	border-top: 0;
+}
+.content-panel + .content-panel {
+	border-top: 0;
+}
+h1#_top {
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+.sl-markdown-content h2 {
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+/* Starlight wraps headings (for the anchor link): the rule spans the wrapper, i.e. the full column. */
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+	margin-top: 3rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--xo-divider);
+}
+.sl-markdown-content h3 {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+.sl-markdown-content a {
+	text-underline-offset: 2px;
+	font-weight: 500;
+}
+.sl-markdown-content :not(pre) > code {
+	background-color: var(--xo-code-bg);
+	border: 0;
+	border-radius: 4px;
+	padding: 0.15em 0.4em;
+	font-size: 0.875em;
+}
+
+/* "On this page": small muted links, accent for the current section. */
+starlight-toc h2 {
+	font-size: 0.875rem;
+	font-weight: 600;
+	color: var(--sl-color-white);
+}
+starlight-toc a {
+	font-size: 0.8125rem;
+	color: var(--sl-color-gray-3);
+}
+starlight-toc a[aria-current='true'] {
+	color: var(--sl-color-accent);
+}
+
+/* Splash page: VitePress's gradient name, a modest hero image, rounded cards. */
+.hero h1 {
+	background: linear-gradient(120deg, var(--sl-color-accent) 30%, #41a5d1);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+.hero > img {
+	max-width: 14rem;
+	justify-self: center;
+}
+.card {
+	border-radius: 12px;
+	border-color: var(--xo-divider);
+	background-color: var(--xo-sidebar-bg);
+}

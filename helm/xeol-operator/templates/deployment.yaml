@@ -1,11 +1,20 @@
 {{- if not (has .Values.db.source (list "online" "mounted")) }}
 {{- fail "db.source must be online or mounted" }}
 {{- end }}
+{{- if not (or .Values.eol.enabled .Values.trivy.enabled) }}
+{{- fail "at least one of eol.enabled or trivy.enabled must be true" }}
+{{- end }}
+{{- $eol := .Values.eol.enabled }}
+{{- $trivy := .Values.trivy.enabled }}
 {{- $mounted := eq .Values.db.source "mounted" }}
-{{- $dbInit := and $mounted .Values.db.mounted.initContainer.image }}
-{{- if and $mounted (not $dbInit) (not .Values.db.mounted.volume) }}
+{{- $dbInit := and $eol $mounted .Values.db.mounted.initContainer.image }}
+{{- if and $eol $mounted (not $dbInit) (not .Values.db.mounted.volume) }}
 {{- fail "db.source=mounted needs db.mounted.volume or db.mounted.initContainer.image" }}
 {{- end }}
+{{- if and $trivy $mounted (not .Values.trivy.mounted.volume) }}
+{{- fail "db.source=mounted with trivy.enabled needs trivy.mounted.volume" }}
+{{- end }}
+{{- $trivyDBDir := ternary .Values.trivy.mounted.path "/var/cache/trivy" $mounted }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,8 +76,20 @@ spec:
             - --xeol-bin=/usr/local/bin/xeol
             - --syft-bin=/usr/local/bin/syft
             - --state-dir=/var/lib/xeol-operator
+            - --config=/etc/xeol-operator/config.yaml
             - --scan-memory-limit={{ .Values.scanner.goMemLimit }}
             - --scan-max-procs={{ .Values.scanner.maxProcs }}
+            {{- if not $eol }}
+            - --eol=false
+            {{- end }}
+            {{- if $trivy }}
+            - --trivy
+            - --trivy-bin=/usr/local/bin/trivy
+            - --trivy-db-dir={{ $trivyDBDir }}
+            {{- with .Values.trivy.dbRepository }}
+            - --trivy-db-repository={{ join "," . }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.ui.enabled }}
             - --ui
             {{- end }}
@@ -88,7 +109,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
-            # Ready once the EOL database is valid (online mode: first build from endoflife.date).
+            # Ready once the database of every enabled scan type is usable (online mode: first build or download).
             httpGet: {path: /readyz, port: probes}
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -101,26 +122,49 @@ spec:
             capabilities:
               drop: [ALL]
           volumeMounts:
+            {{- if $eol }}
             - name: xeol-db
               mountPath: {{ include "xeol-operator.dbDir" . }}
               readOnly: {{ and $mounted (not $dbInit) }}
+            {{- end }}
+            {{- if $trivy }}
+            - name: trivy-db
+              mountPath: {{ $trivyDBDir }}
+              readOnly: {{ $mounted }}
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             - name: state
               mountPath: /var/lib/xeol-operator
+            # No subPath: the kubelet updates the file in place and the operator reloads it.
+            - name: config
+              mountPath: /etc/xeol-operator
+              readOnly: true
       volumes:
+        - name: config
+          configMap:
+            name: {{ include "xeol-operator.fullname" . }}-config
         # Survives container restarts: saved scan results (results.db) and in-flight markers that
         # reveal a scan that OOM-killed the pod.
         - name: state
           emptyDir:
             sizeLimit: 64Mi
-        {{- if and $mounted (not $dbInit) }}
+        {{- if not $eol }}
+        {{- else if and $mounted (not $dbInit) }}
         - name: xeol-db
           {{- toYaml .Values.db.mounted.volume | nindent 10 }}
         {{- else }}
         - name: xeol-db
           emptyDir:
             sizeLimit: 512Mi
+        {{- end }}
+        {{- if and $trivy $mounted }}
+        - name: trivy-db
+          {{- toYaml .Values.trivy.mounted.volume | nindent 10 }}
+        {{- else if $trivy }}
+        - name: trivy-db
+          emptyDir:
+            sizeLimit: {{ .Values.trivy.dbSizeLimit }}
         {{- end }}
         - name: tmp
           emptyDir:

@@ -21,13 +21,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
-func ignoreSnap(t *testing.T, rules ...xeolv1alpha1.IgnoreRule) ConfigSnapshot {
+func ignoreSnap(t *testing.T, rules ...config.IgnoreRule) ConfigSnapshot {
 	t.Helper()
-	snap, err := SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{IgnoreProducts: rules})
+	snap, err := SnapshotFrom(&config.Config{IgnoreProducts: rules})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,9 +51,9 @@ var (
 
 func TestIgnoreGlobal(t *testing.T) {
 	s := ignoreSnap(t,
-		xeolv1alpha1.IgnoreRule{Products: []string{"NodeJS"}},                          // slug, any case
-		xeolv1alpha1.IgnoreRule{Products: []string{"python"}, Cycles: []string{"3.8"}}, // one cycle only
-		xeolv1alpha1.IgnoreRule{Products: []string{"debian"}},                          // no URL: lowercased name
+		config.IgnoreRule{Products: []string{"NodeJS"}},                          // slug, any case
+		config.IgnoreRule{Products: []string{"python"}, Cycles: []string{"3.8"}}, // one cycle only
+		config.IgnoreRule{Products: []string{"debian"}},                          // no URL: lowercased name
 	)
 	for _, tt := range []struct {
 		f    scanner.Finding
@@ -67,7 +67,7 @@ func TestIgnoreGlobal(t *testing.T) {
 		}
 	}
 	// The display name works too, spaces and all.
-	s = ignoreSnap(t, xeolv1alpha1.IgnoreRule{Products: []string{"Node.js", " gorilla toolkit "}})
+	s = ignoreSnap(t, config.IgnoreRule{Products: []string{"Node.js", " gorilla toolkit "}})
 	if !s.Ignored(node16, nil) || !s.Ignored(gorilla, nil) || s.Ignored(perl, nil) {
 		t.Error("display names Node.js / Gorilla Toolkit should match")
 	}
@@ -75,10 +75,10 @@ func TestIgnoreGlobal(t *testing.T) {
 
 func TestIgnoreScoped(t *testing.T) {
 	s := ignoreSnap(t,
-		xeolv1alpha1.IgnoreRule{Products: []string{"gorilla"},
+		config.IgnoreRule{Products: []string{"gorilla"},
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "grafana"}}},
-		xeolv1alpha1.IgnoreRule{Products: []string{"perl"}, Namespaces: []string{"test"}},
-		xeolv1alpha1.IgnoreRule{Products: []string{"python"}, Namespaces: []string{"p*"},
+		config.IgnoreRule{Products: []string{"perl"}, Namespaces: []string{"test"}},
+		config.IgnoreRule{Products: []string{"python"}, Namespaces: []string{"p*"},
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "legacy"}}},
 	)
 	// Selector on the workload's own labels.
@@ -105,10 +105,10 @@ func TestIgnoreScoped(t *testing.T) {
 }
 
 func TestSnapshotInvalidIgnore(t *testing.T) {
-	for _, r := range []xeolv1alpha1.IgnoreRule{
+	for _, r := range []config.IgnoreRule{
 		{Products: []string{"perl"}, Selector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "team", Operator: "Bogus"}}}},
 	} {
-		if _, err := SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{IgnoreProducts: []xeolv1alpha1.IgnoreRule{r}}); err == nil {
+		if _, err := SnapshotFrom(&config.Config{IgnoreProducts: []config.IgnoreRule{r}}); err == nil {
 			t.Errorf("SnapshotFrom(%+v): want error", r)
 		}
 	}

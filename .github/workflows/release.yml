@@ -1,6 +1,7 @@
 name: Release
 
-# Publishing a GitHub release pushes docker.io/rishang/xeol-operator:<tag>.
+# Publishing a GitHub release pushes docker.io/rishang/xeol-operator:<tag>, then attaches the Helm chart
+# (version = tag) to the release and redeploys GitHub Pages, which serves it in the Helm repository.
 # Tag v0.1.0 also pushes :0.1.0, the form the chart's image.tag defaults to (appVersion).
 # Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token, Read & Write).
 on:
@@ -40,3 +41,36 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # The Helm chart, versioned like the release (v0.2.0 -> 0.2.0, image tag 0.2.0), attached to the release.
+  # The Pages workflow then publishes it in the Helm repository at https://rishang.github.io/xeol-operator.
+  chart:
+    needs: image # the chart's default image.tag must exist first
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # upload the release asset
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@v5
+      - name: Package and attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${TAG#v}"
+          # Artifact Hub shows this image; keep it on the version being released.
+          yq -i ".annotations.\"artifacthub.io/images\" |= sub(\"xeol-operator:[^\\n]+\", \"xeol-operator:$V\")" helm/xeol-operator/Chart.yaml
+          helm package helm/xeol-operator --version "$V" --app-version "$V" -d dist
+          gh release upload "$TAG" "dist/xeol-operator-$V.tgz" -R "$GITHUB_REPOSITORY" --clobber
+
+  pages:
+    needs: chart
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

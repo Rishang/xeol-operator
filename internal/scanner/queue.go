@@ -30,7 +30,8 @@ import (
 type Store interface {
 	// Target resolves a digest to something scannable; false if it stopped running.
 	Target(ctx context.Context, digest string) (Target, bool, error)
-	SetResult(digest string, findings []Finding, errReason string, at, next time.Time)
+	// SetResult stores a scan; nil Findings or Vulns keep the previous ones (see Result).
+	SetResult(digest string, r Result, errReason string, at, next time.Time)
 	// Due lists digests whose next scan time has passed.
 	Due(now time.Time) []string
 	// Interval is the rescan interval after a successful scan.
@@ -40,7 +41,7 @@ type Store interface {
 // Queue scans digests with a fixed number of workers. The workqueue dedupes: a digest that is
 // already queued is not added twice, and one digest is never scanned by two workers at once.
 type Queue struct {
-	Scan    func(ctx context.Context, t Target) ([]Finding, error)
+	Scan    func(ctx context.Context, t Target) (Result, error)
 	Store   Store
 	Workers int
 	// RetryAfter is how soon a failed scan is retried.
@@ -119,7 +120,7 @@ func (q *Queue) next(ctx context.Context) bool {
 	if err != nil {
 		q.Log.Error(err, "resolving scan target", "digest", digest)
 		now := time.Now()
-		q.Store.SetResult(digest, nil, ReasonOther, now, now.Add(q.RetryAfter))
+		q.Store.SetResult(digest, Result{}, ReasonOther, now, now.Add(q.RetryAfter))
 		if q.Observe != nil {
 			q.Observe(0, ReasonOther) // counted as an error like any failed scan
 		}
@@ -131,10 +132,13 @@ func (q *Queue) next(ctx context.Context) bool {
 
 	q.Log.Info("scanning", "image", t.Ref)
 	start := time.Now()
-	findings, err := q.Scan(ctx, t)
+	res, err := q.Scan(ctx, t)
 	end := time.Now()
 	reason := ""
 	next := end.Add(q.Store.Interval())
+	if err == nil && res.VulnErr != nil {
+		err = res.VulnErr // EOL findings are kept; the image is retried for its vulnerabilities
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return false // shutting down: don't record a spurious failure
@@ -147,9 +151,9 @@ func (q *Queue) next(ctx context.Context) bool {
 		q.Log.Info("scan failed", "image", t.Ref, "reason", reason, "error", err.Error())
 	} else {
 		q.Log.Info("scanned", "image", t.Ref, "duration", end.Sub(start).Round(time.Millisecond).String(),
-			"findings", len(findings), "queued", q.q.Len())
+			"findings", len(res.Findings), "vulnerabilities", len(res.Vulns), "queued", q.q.Len())
 	}
-	q.Store.SetResult(digest, findings, reason, end, next)
+	q.Store.SetResult(digest, res, reason, end, next)
 	if q.Observe != nil {
 		q.Observe(end.Sub(start), reason)
 	}

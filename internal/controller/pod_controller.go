@@ -38,6 +38,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
 // maxOwnerDepth bounds the owner walk: Pod -> ReplicaSet -> Deployment is 2; leave room for e.g. Argo Rollouts.
@@ -65,7 +67,7 @@ type PodReconciler struct {
 func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cfg, ok := r.Config.Get()
 	if !ok {
-		return ctrl.Result{}, nil // no XeolScanner/default: scan nothing
+		return ctrl.Result{}, nil // no config applied yet: scan nothing
 	}
 
 	log := logf.FromContext(ctx)
@@ -152,7 +154,7 @@ func (r *PodReconciler) restore(ctx context.Context, digest string) bool {
 	if !ok {
 		return false
 	}
-	r.Inventory.SetResult(digest, rec.Findings, rec.ErrReason, rec.Scanned, rec.Next)
+	r.Inventory.SetResult(digest, scanner.Result{Findings: rec.Findings, Vulns: rec.Vulns}, rec.ErrReason, rec.Scanned, rec.Next)
 	return time.Now().Before(rec.Next)
 }
 
@@ -293,7 +295,7 @@ func excluded(globs []string, values ...string) bool {
 	return false
 }
 
-// SetupWithManager watches Pods, and re-evaluates every Pod once a changed XeolScanner/default is applied.
+// SetupWithManager watches Pods, and re-evaluates every Pod once a changed config file is applied.
 func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).For(&corev1.Pod{}).Named("pod")
 	if r.Config.Changed != nil {
@@ -305,7 +307,7 @@ func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *PodReconciler) allPods(ctx context.Context, _ client.Object) []ctrl.Request {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods); err != nil {
-		logf.FromContext(ctx).Error(err, "listing pods after XeolScanner change")
+		logf.FromContext(ctx).Error(err, "listing pods after a config change")
 		return nil
 	}
 	reqs := make([]ctrl.Request, 0, len(pods.Items))

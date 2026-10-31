@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/controller"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
@@ -51,7 +51,7 @@ func TestCollect(t *testing.T) {
 	}})
 	eol, _ := time.Parse(time.DateOnly, "2024-10-07")
 	f := scanner.Finding{Product: "Python", Cycle: "3.8", EOL: eol, Package: "python", Version: "3.8.20", URL: "https://endoflife.date/python"}
-	inv.SetResult("sha256:abc", []scanner.Finding{f}, "", time.Now(), time.Now().Add(time.Hour))
+	inv.SetResult("sha256:abc", scanner.Result{Findings: []scanner.Finding{f}}, "", time.Now(), time.Now().Add(time.Hour))
 
 	want := `
 # HELP xeol_db_built_timestamp_seconds When the EOL database in use was built (Unix seconds).
@@ -73,7 +73,7 @@ func TestNoStaleSeries(t *testing.T) {
 	inv, c := setup(t)
 	pod := types.NamespacedName{Namespace: "a", Name: "p"}
 	inv.SetPod(pod, []controller.PodImage{{Digest: "sha256:abc", Repo: "r", Workload: controller.Workload{Namespace: "a", Kind: "Pod", Name: "p"}}})
-	inv.SetResult("sha256:abc", []scanner.Finding{{Product: "X", Cycle: "1", EOL: time.Unix(0, 0)}}, "", time.Now(), time.Now())
+	inv.SetResult("sha256:abc", scanner.Result{Findings: []scanner.Finding{{Product: "X", Cycle: "1", EOL: time.Unix(0, 0)}}}, "", time.Now(), time.Now())
 	if n := testutil.CollectAndCount(c, "xeol_eol_date_seconds"); n != 1 {
 		t.Fatalf("before delete: %d series", n)
 	}
@@ -106,7 +106,7 @@ func TestRegister(t *testing.T) {
 
 func TestCollectIgnores(t *testing.T) {
 	inv, c := setup(t)
-	snap, err := controller.SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{IgnoreProducts: []xeolv1alpha1.IgnoreRule{
+	snap, err := controller.SnapshotFrom(&config.Config{IgnoreProducts: []config.IgnoreRule{
 		{Products: []string{"gorilla"}, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "grafana"}}},
 		{Products: []string{"perl"}, Namespaces: []string{"test"}},
 	}})
@@ -121,7 +121,7 @@ func TestCollectIgnores(t *testing.T) {
 		for _, p := range products {
 			fs = append(fs, scanner.Finding{Product: p, Cycle: "1", URL: "https://endoflife.date/" + p})
 		}
-		inv.SetResult(digest, fs, "", time.Now(), time.Now().Add(time.Hour))
+		inv.SetResult(digest, scanner.Result{Findings: fs}, "", time.Now(), time.Now().Add(time.Hour))
 	}
 	run("monitoring", "grafana", "sha256:graf", map[string]string{"app.kubernetes.io/name": "grafana"}, "gorilla")
 	run("monitoring", "prometheus", "sha256:prom", nil, "gorilla")
@@ -133,5 +133,35 @@ func TestCollectIgnores(t *testing.T) {
 	// Left: prometheus gorilla, py python, web perl.
 	if n := testutil.CollectAndCount(c, "xeol_eol_date_seconds"); n != 3 {
 		t.Fatalf("series = %d, want 3", n)
+	}
+}
+
+func TestCollectVulns(t *testing.T) {
+	inv, c := setup(t)
+	updated := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	c.VulnDBUpdated = func() (time.Time, error) { return updated, nil }
+	pod := types.NamespacedName{Namespace: "a", Name: "p"}
+	inv.SetPod(pod, []controller.PodImage{{Digest: "sha256:abc", Repo: "r", Workload: controller.Workload{Namespace: "a", Kind: "Pod", Name: "p"}}})
+	inv.SetResult("sha256:abc", scanner.Result{Vulns: []scanner.Vuln{
+		{ID: "CVE-1", Severity: "CRITICAL", FixedVersion: "1.1"},
+		{ID: "CVE-2", Severity: "CRITICAL", FixedVersion: "1.2"},
+		{ID: "CVE-3", Severity: "HIGH"},
+	}}, "", time.Now(), time.Now().Add(time.Hour))
+	want := `
+# HELP xeol_vuln_db_updated_timestamp_seconds When the trivy vulnerability database in use was published (Unix seconds).
+# TYPE xeol_vuln_db_updated_timestamp_seconds gauge
+xeol_vuln_db_updated_timestamp_seconds 1.793232e+09
+# HELP xeol_vulnerabilities Known vulnerabilities in a running image digest: unique (CVE, package) rows by severity and whether a fixed version exists. Join on digest with xeol_image_workload.
+# TYPE xeol_vulnerabilities gauge
+xeol_vulnerabilities{digest="sha256:abc",fixable="false",severity="HIGH"} 1
+xeol_vulnerabilities{digest="sha256:abc",fixable="true",severity="CRITICAL"} 2
+`
+	// No MEDIUM/LOW series and no CRITICAL/fixable=false series: zero counts are omitted.
+	if err := testutil.CollectAndCompare(c, strings.NewReader(want), "xeol_vulnerabilities", "xeol_vuln_db_updated_timestamp_seconds"); err != nil {
+		t.Fatal(err)
+	}
+	inv.DeletePod(pod)
+	if n := testutil.CollectAndCount(c, "xeol_vulnerabilities"); n != 0 {
+		t.Fatalf("after delete: %d series, want 0", n)
 	}
 }

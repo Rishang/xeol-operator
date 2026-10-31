@@ -56,13 +56,16 @@ type Image struct {
 	Scanned     time.Time
 	Next        time.Time
 	Findings    []scanner.Finding
-	ErrReason   string
+	// Vulns is nil until the digest is scanned with trivy.
+	Vulns     []scanner.Vuln
+	ErrReason string
 }
 
 type entry struct {
 	pods          map[types.NamespacedName]PodImage
 	scanned, next time.Time
 	findings      []scanner.Finding
+	vulns         []scanner.Vuln
 	errReason     string
 }
 
@@ -134,14 +137,6 @@ func (inv *Inventory) DeletePod(pod types.NamespacedName) (removed []string) {
 	return removed
 }
 
-// Clear drops everything, e.g. when the XeolScanner is deleted.
-func (inv *Inventory) Clear() {
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	inv.images = map[string]*entry{}
-	inv.pods = map[types.NamespacedName][]string{}
-}
-
 // Get returns one digest's snapshot.
 func (inv *Inventory) Get(digest string) (Image, bool) {
 	inv.mu.RLock()
@@ -166,7 +161,7 @@ func (inv *Inventory) Images() []Image {
 }
 
 func snapshot(digest string, e *entry) Image {
-	img := Image{Digest: digest, Scanned: e.scanned, Next: e.next, Findings: e.findings, ErrReason: e.errReason}
+	img := Image{Digest: digest, Scanned: e.scanned, Next: e.next, Findings: e.findings, Vulns: e.vulns, ErrReason: e.errReason}
 	seenW := map[string]bool{}
 	seenS := map[types.NamespacedName]bool{}
 	var first string
@@ -195,8 +190,9 @@ func snapshot(digest string, e *entry) Image {
 }
 
 // SetResult stores a scan result and when to scan next. A failure without findings (a failed scan)
-// keeps the previous ones; a restored record brings its own.
-func (inv *Inventory) SetResult(digest string, findings []scanner.Finding, errReason string, at, next time.Time) {
+// keeps the previous ones; a restored record brings its own. Nil vulns (trivy off, or its step
+// failed) keep the previous ones too.
+func (inv *Inventory) SetResult(digest string, r scanner.Result, errReason string, at, next time.Time) {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	e, ok := inv.images[digest]
@@ -204,8 +200,11 @@ func (inv *Inventory) SetResult(digest string, findings []scanner.Finding, errRe
 		return // stopped running while being scanned
 	}
 	e.scanned, e.next, e.errReason = at, next, errReason
-	if errReason == "" || findings != nil {
-		e.findings = findings
+	if errReason == "" || r.Findings != nil {
+		e.findings = r.Findings
+	}
+	if r.Vulns != nil {
+		e.vulns = r.Vulns
 	}
 }
 

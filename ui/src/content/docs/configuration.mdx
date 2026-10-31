@@ -1,0 +1,389 @@
+---
+title: Configuration
+description: "The scan config file: which images get scanned, how often, what to ignore, live reload and errors."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+One YAML file controls what the operator scans. With it you decide:
+
+- which running images are scanned,
+- how often they are rescanned,
+- which workload labels end up on the metrics,
+- which findings you accept and want hidden.
+
+The Helm chart builds this file from your `scanner.*` values. It stores it in the ConfigMap `xeol-operator-config` and mounts it at `/etc/xeol-operator/config.yaml`. That path is what the operator's `--config` flag points to.
+
+To change it, run `helm upgrade` or edit the ConfigMap. The operator reloads the file in place. No restart is needed.
+
+Some settings are not in this file: workers, memory, timeout, databases and scan types. They control how scans run, and they are operator flags set by Helm. Changing them needs a pod restart anyway.
+
+## Fields
+
+Every field is optional. With an empty or missing file, the operator scans every running image of the default workload kinds, in every namespace, once a day. The chart's defaults also add `excludeNamespaces: [kube-*]`.
+
+| Field | Type | Default | Behaviour |
+|---|---|---|---|
+| `namespaceSelector` | LabelSelector | all namespaces | Scan only Pods in namespaces whose labels match. |
+| `excludeNamespaces` | []string (globs) | none | Namespaces to skip. An exclude always wins. |
+| `excludeImages` | []string (globs) | none | Images to skip. |
+| `interval` | duration | `24h` | Time from a successful scan of a digest to its next scan. |
+| `workloadKinds` | []string | `[Deployment, StatefulSet, DaemonSet, Job, CronJob]` | Top-level workload kinds to scan. |
+| `ignoreProducts` | []rule | none | Accepted findings to hide; see [Ignoring products](#ignoring-products). |
+| `workloadLabels` | []string | none | Workload label keys to copy onto `xeol_image_workload` as `k8s_label_<key>`. |
+
+More detail on each field:
+
+- **`namespaceSelector`**: both `matchLabels` and `matchExpressions` work.
+- **`excludeNamespaces`**: checked before `namespaceSelector`, so an excluded namespace is never scanned.
+- **`excludeImages`**: each glob is matched two ways. First against the image as written in the Pod spec (`python:3.8-slim`). Then against the resolved repository (`docker.io/library/python`).
+- **`interval`**: failed scans retry after 1h. If an image's scan OOM-killed the operator (ran it out of memory), that image waits 24h. A zero or negative value means 24h.
+- **`workloadKinds`**: kinds are matched exactly. A Pod's kind is its top owner: Pod → ReplicaSet → Deployment, or Job → CronJob. So Pods owned by other operators, such as `Prometheus` and `Alertmanager`, are skipped. So are bare Pods. Set `[]` to scan every kind. Add e.g. `Rollout` for Argo Rollouts.
+- **`workloadLabels`**: labels come from each top-level workload (Deployment, StatefulSet, CronJob, ...). Any character other than `[a-zA-Z0-9_]` becomes `_`. So `app.kubernetes.io/part-of` becomes `k8s_label_app_kubernetes_io_part_of`.
+
+### What each field is for
+
+- **`namespaceSelector`**: scan only what you opt in. Label the namespaces you want scanned (`kubectl label ns payments xeol-scan=true`), then select them. Use it to roll out team by team, or to skip sandboxes.
+- **`excludeNamespaces`**: skip namespaces you don't own or can't change, such as `kube-*`, `monitoring` and `cert-manager`. Their images are vendor-managed. They would only add findings nobody acts on.
+- **`excludeImages`**: skip images that can't be scanned or don't matter. Examples: huge images that run out of memory, images from a registry the operator can't reach, and `busybox`-style helpers.
+- **`interval`**: trade fresh results against how much scanning you do. Images are scanned by digest, so their contents never change. A rescan only picks up new EOL data. `24h` matches the daily database rebuild. Lower it only if you need new EOL dates sooner.
+- **`workloadKinds`**: keep findings to the workloads your teams deploy. The default skips Pods owned by operators (`Prometheus`, `Alertmanager`, ...) and bare Pods. Add your own kinds, e.g. `Rollout` for Argo Rollouts, or set `[]` for everything.
+- **`ignoreProducts`**: accept a finding you've decided to live with. It stops alerting and stops cluttering the dashboard. The image is still scanned. You can narrow a rule by cycle, namespace or workload labels.
+- **`workloadLabels`**: route and group findings by owner. `[team]` puts `k8s_label_team` on `xeol_image_workload`. Alerts can then go to each team's channel, and dashboards can group by team.
+
+### Glob syntax
+
+`excludeNamespaces`, `excludeImages` and `ignoreProducts[].namespaces` take globs. A glob is a pattern with wildcards. Only two characters are special:
+
+- `*` matches any run of characters, **`/` included**. So `registry.internal/*` matches both `registry.internal/app` and `registry.internal/team/app`.
+- `?` matches exactly one character.
+
+The whole value must match. `kube-*` matches `kube-system`, but not `my-kube-test`.
+
+Every string is a valid glob. Any other character, such as `[` or `.`, matches itself.
+
+## Changes apply live
+
+<Steps>
+
+1. Change `scanner.*` and run `helm upgrade`. Or edit the ConfigMap directly:
+
+   ```bash
+   kubectl -n xeol-system edit configmap xeol-operator-config
+   ```
+
+2. The kubelet updates the mounted file, usually within a minute. This works because the ConfigMap is mounted without `subPath`.
+
+3. The operator checks the file every 5 seconds. When it changes, the operator applies it and logs `config file reloaded`. Then it re-checks every Pod straight away:
+   - Newly excluded images drop out of the metrics on the next scrape.
+   - Newly included images are queued for a scan.
+   - Ignore rules apply at export time, with no rescan.
+
+</Steps>
+
+You need no pod restart, no rollout and no reloader. A Helm upgrade that only changes `scanner.*` doesn't restart the pod either.
+
+<Aside type="caution" title="kubectl edits and the next helm upgrade">
+Helm owns the ConfigMap, so a hand edit doesn't last:
+
+- **Helm 4:** the next `helm upgrade` after a `kubectl edit` fails with `conflict with "kubectl-edit"`. Add `--force-conflicts` and your values win, which drops the hand edit.
+- **Helm 3:** the upgrade quietly replaces the edit whenever `scanner.*` changes.
+
+Use `kubectl edit` to try something out. Then move the change into your values.
+</Aside>
+
+### Errors
+
+The operator parses the file strictly. Any of these is an error:
+
+- an unknown field, such as the typo `intervall`,
+- a bad duration,
+- a label selector that doesn't parse.
+
+What happens next depends on when the error shows up:
+
+- **At startup**, a bad file stops the operator, with the error in its log. It doesn't guess and scan anyway. The pod shows `CrashLoopBackOff` until you fix the ConfigMap.
+- **On a later edit**, the operator keeps its current config. It logs `config file rejected; keeping the previous config` with the error, and reports it as `config_error` in `/api/v1/status`. The next good file clears it.
+
+<Aside type="tip">
+Check a change before you apply it. `helm template` renders the file from your values. If the operator rejects it, its log shows the exact error.
+</Aside>
+
+## Ignoring products
+
+Some findings are known and accepted. Think of a vendor image on an old Debian, or a legacy service with a planned upgrade. `ignoreProducts` hides them from the metrics, alerts, JSON API and dashboards.
+
+Ignored images are still scanned. If you remove a rule, its findings come back on the next scrape, with no rescan.
+
+```yaml
+ignoreProducts:
+  - products: [perl]                 # required: endoflife.date slug or display name, case-insensitive
+    namespaces: [test]               # optional: namespace globs
+  - products: [gorilla]
+    selector:                        # optional: the workload's own labels
+      matchLabels: {app.kubernetes.io/name: grafana}
+  - products: [python]
+    cycles: ["3.8"]                  # optional: only these release cycles
+```
+
+| Rule field | Meaning | Empty means |
+|---|---|---|
+| `products` | The product's endoflife.date slug or display name. Case-insensitive. | (required) |
+| `cycles` | Release cycles, as shown in the `cycle` label (`3.8`, `12`). | every cycle |
+| `namespaces` | Namespace name globs, same syntax as `excludeNamespaces`. | every namespace |
+| `selector` | Label selector on the workload's own `metadata.labels`. | every workload |
+
+About `products`:
+
+- The slug is the last part of the product's endoflife.date page: `nodejs`, `gorilla`, `rhel`.
+- The display name is what the dashboard shows: `Node.js`, `Gorilla Toolkit`, `Red Hat Enterprise Linux`.
+- Spaces inside a name are kept, so `[Gorilla Toolkit]` works as written.
+
+About `selector`: it matches the labels of the Deployment, DaemonSet, StatefulSet or CronJob itself (or a bare Pod's labels). It does not match the Pod template's labels.
+
+A rule applies to a workload when both `namespaces` and `selector` match. A rule with neither applies everywhere.
+
+**Images shared between workloads.** The EOL metric has one series per image digest, not per workload. That affects scoped rules:
+
+- In the JSON API and dashboard tables, a scoped rule hides the finding from the matching workloads' rows.
+- In `xeol_eol_date_seconds` (and the alerts built on it), the finding drops only when *every* workload running that image matches.
+
+Example: `python:3.8-slim` runs in `test/python38` and `prod/api`. The rule `{products: [python], namespaces: [test]}` doesn't remove it from the metric. It still alerts, because of `prod/api`.
+
+An invalid selector rejects the whole file (see [Errors](#errors)). The previous config stays in effect.
+
+## Tuning xeol and trivy
+
+syft catalogs each image once, producing an SBOM (a list of the software inside it). Two scanners then read that SBOM:
+
+- xeol looks for end-of-life software.
+- trivy looks for known vulnerabilities.
+
+Where you change a setting matters:
+
+- **Config file** settings apply live.
+- **Helm** values become operator flags or pod settings. Changing them rolls the pod; a `helm upgrade` does that for you.
+
+### EOL scanning (xeol)
+
+| Setting | Where | Default | What it changes |
+|---|---|---|---|
+| `eol.enabled` | Helm (`--eol`) | `true` | Turns EOL scanning on or off. At least one of xeol and trivy stays on. |
+| `ignoreProducts` | config file (live) | none | Hides accepted EOL findings; see [Ignoring products](#ignoring-products). |
+| `db.source` | Helm (`--db-source`) | `online` | Where the EOL database comes from. |
+| `db.url` | Helm (`--eol-url`) | endoflife.date's `products/full` | Point online builds at an internal mirror of endoflife.date. |
+| `db.mounted.volume`, `db.mounted.initContainer.image` | Helm | none | Where a mounted EOL database comes from. |
+| `prometheusRule.eolSoonDays` | Helm | `90` | How close an EOL date must be for `XeolEOLSoftwareSoon`. |
+| `prometheusRule.dbStaleDays` | Helm | `30` | Age of the EOL database before `XeolDatabaseStale` fires. |
+
+Details:
+
+- `ignoreProducts` can match by product, cycle, namespace or workload labels.
+- `db.source: online` builds the EOL database from endoflife.date at start and daily. `mounted` reads a prebuilt one ([Air-gapped installation](/xeol-operator/air-gapped/)).
+- A mounted EOL database comes either from a volume, or is copied out of an image at startup.
+
+Fixed by design:
+
+- xeol always looks 10 years ahead and exports the EOL date itself. So "how soon counts" is a query or alert threshold, not a setting.
+- xeol's auto-update and age check are off, because the operator manages the database.
+- xeol never contacts `xeol.io` and never uploads results.
+- syft uses xeol's cataloger selection.
+
+### Vulnerability scanning (trivy)
+
+| Setting | Where | Default | What it changes |
+|---|---|---|---|
+| `trivy.enabled` | Helm (`--trivy`) | `false` | Turns vulnerability scanning on. |
+| `trivy.dbRepository` | Helm (`--trivy-db-repository`) | trivy's (`mirror.gcr.io`, then `ghcr.io`) | OCI repositories to download the database from, e.g. an internal mirror. |
+| `trivy.dbSizeLimit` | Helm | `5Gi` | Size of the database volume in online mode. |
+| `trivy.mounted.volume`, `trivy.mounted.path` | Helm | none, `/trivy-db` | Read trivy's database from a volume instead of downloading it. |
+| `trivy.dbStaleDays` | Helm | `7` | Age of the trivy database before `XeolVulnDatabaseStale` fires. |
+
+Details:
+
+- With `trivy.enabled`, the pod downloads trivy's database (~1.6 GB) before it turns Ready.
+- `trivy.dbSizeLimit` must hold the current copy plus the next download.
+- `trivy.mounted.*` applies with `db.source: mounted`.
+
+Fixed by design:
+
+- Only trivy's vulnerability scanner runs, and only against the SBOM. There's no `trivy image`, and no secret, misconfiguration or license scanning.
+- Only the main database is used, not the Java database.
+- Scans never update the database or call out.
+- There are no vulnerability ignore rules or VEX yet. Filter by severity and fixed version instead, in the web page, Grafana and `/api/v1/vulnerabilities`.
+
+### Shared by both
+
+| Setting | Where | Default | What it changes |
+|---|---|---|---|
+| `interval` | config file (live) | `24h` | How often each image digest is rescanned by both. |
+| `namespaceSelector`, `excludeNamespaces`, `excludeImages`, `workloadKinds` | config file (live) | see [Fields](#fields) | Which running images are scanned at all. |
+| `scanner.workers` | Helm (`--scan-workers`) | `1` | Images scanned at the same time. Memory use adds up per worker. |
+| `scanner.timeout` | Helm | `10m` | Limit for one image's whole scan: syft, xeol and trivy. |
+| `scanner.goMemLimit`, `scanner.maxProcs` | Helm | `800MiB`, `2` | `GOMEMLIMIT` and `GOMAXPROCS` for syft, xeol and trivy. |
+| `scanTmp.sizeLimit` | Helm | `4Gi` | Scratch space for the image layers syft unpacks. |
+| `resources.limits.memory` | Helm | `1Gi` | The pod's memory. |
+
+Details:
+
+- Keep `scanner.goMemLimit` below `resources.limits.memory`.
+- The `scanTmp` scratch space is cleared after each scan.
+- An image whose scan needs more than `resources.limits.memory` is skipped for 24h (`reason="oom"`).
+- Memory use per scan: syft is the peak (~250 MB for a slim image). trivy adds ~100 MB and xeol ~70 MB, one after the other.
+
+### Reporting and the pod
+
+These settings control how findings reach you and where the pod runs. All are Helm values. The full list with defaults is in [Values](/xeol-operator/helm/#values).
+
+| Setting | Default | What it changes |
+|---|---|---|
+| `workloadLabels` (config file, live) | none | Puts your workload labels (`team`, `app.kubernetes.io/part-of`) on `xeol_image_workload`. |
+| `serviceMonitor.enabled`, `.interval`, `.labels` | `false`, `60s`, `{}` | Prometheus scraping. |
+| `prometheusRule.enabled`, `.labels`, `.eolSoonDays`, `.dbStaleDays` | `false`, `{}`, `90`, `30` | Alert rules and their thresholds. |
+| `grafanaDatasource.enabled`, `.labels`; `grafanaDashboard.labels`, `.annotations` | `false` | The Infinity datasource and dashboards. |
+| `ui.enabled` | `false` | Built-in web page at `/`. |
+| `mcp.enabled` | `false` | MCP tools at `/mcp` for AI assistants. |
+| `metrics.port` | `8080` | Port for `/metrics`, the JSON API, the web page and MCP. |
+| `replicas` | `1` | Extra replicas are standby (leader election). |
+| `image.repository`, `image.tag`, `image.pullPolicy`, `imagePullSecrets` | Docker Hub, chart version | The operator image, e.g. from an internal mirror. |
+| `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations` | empty | Pod placement and metadata. |
+
+Details:
+
+- `workloadLabels` lets you route alerts and group dashboards by owner.
+- `serviceMonitor.labels`: add `{release: <your stack>}` if your Prometheus selects ServiceMonitors by label.
+- `prometheusRule`: to tune severities or `for:` durations, copy the rules into your own `PrometheusRule`.
+- `grafanaDatasource` / `grafanaDashboard`: set the labels your Grafana sidecars watch. Set the `grafana_folder` annotation to choose a folder.
+- `ui.enabled`: the page's filters and timeline are described in [Usage](/xeol-operator/usage/).
+- `replicas`: only the leader scans and serves.
+
+The JSON API takes query parameters too: `namespace`, `kind`, `within_days` and `severity`. See [Usage](/xeol-operator/usage/).
+
+Private registries need no setting. Each scan uses the `imagePullSecrets` of the Pod (and its ServiceAccount) that runs the image.
+
+## Status
+
+You can see scan progress and health in three places: the operator's JSON API, the metrics and the readiness probe. To query the JSON API:
+
+```bash
+kubectl -n xeol-system port-forward svc/xeol-operator-metrics 8080
+curl -s localhost:8080/api/v1/status
+```
+
+| Field | Meaning |
+|---|---|
+| `images_tracked`, `images_scanned` | Running image digests, and those with a scan result. |
+| `workloads_eol`, `workloads_eol_soon` | Workloads with software past EOL, or reaching it within `within_days`. Ignored findings don't count. |
+| `last_sweep` | The time of the oldest scan result. Set once every running digest has a result. |
+| `db_built`, `db_age_seconds` | The EOL database in use. The `XeolDatabaseStale` alert fires after 30 days. |
+| `failed_scans_by_reason` | Images whose last scan failed, grouped by reason. |
+| `config_error` | Why the config file was last rejected. Empty when the current file is applied. |
+
+The pod turns Ready once the database of every enabled scan type is usable. The web page shows the same numbers.
+
+## Examples
+
+### Every field
+
+This example uses every field and explains each one. Every value shown is valid; delete what you don't need. It is the whole schema: any other key is rejected.
+
+```yaml
+# Scan only Pods in namespaces whose labels match. Empty or absent = all namespaces.
+# Standard Kubernetes label selector: matchLabels and/or matchExpressions (both must match).
+namespaceSelector:
+  matchLabels:
+    xeol-scan: "true"            # kubectl label ns payments xeol-scan=true
+  matchExpressions:
+    - {key: environment, operator: In, values: [prod, staging]}   # In, NotIn, Exists, DoesNotExist
+
+# Namespaces to skip (globs: * = any characters, ? = one character).
+# An exclude always wins over namespaceSelector.
+excludeNamespaces:
+  - "kube-*"
+  - monitoring
+  - cert-manager
+
+# Images to skip (globs). Matched against the image as written in the Pod spec
+# and against its repository, so "python:3.8-slim" and "docker.io/library/python" both work.
+excludeImages:
+  - "registry.internal/*"        # registry.internal/app and registry.internal/team/app
+  - "docker.io/library/busybox"
+
+# Time from a successful scan of a digest to its next scan. Go duration: 30m, 12h, 168h.
+# Absent, zero or negative = 24h.
+interval: 12h
+
+# Top-level workload kinds to scan, matched exactly. A Pod's kind is its top owner:
+# Pod -> ReplicaSet -> Deployment, Job -> CronJob.
+#   absent = [Deployment, StatefulSet, DaemonSet, Job, CronJob]
+#   []     = every kind, including bare Pods and operator-owned Pods
+workloadKinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob, Rollout]
+
+# Workload label keys copied onto xeol_image_workload as k8s_label_<key>.
+# "." and "/" become "_": app.kubernetes.io/part-of -> k8s_label_app_kubernetes_io_part_of
+workloadLabels: [team, app.kubernetes.io/part-of]
+
+# Accepted findings to hide from metrics, the JSON API, the web page and MCP.
+# Images are still scanned. Removing a rule brings the findings back with no rescan.
+ignoreProducts:
+  # Everywhere: every perl finding.
+  - products: [perl]             # required, at least one: endoflife.date slugs or display names, case-insensitive
+
+  # Only one cycle, only in some namespaces (globs).
+  - products: [python]
+    cycles: ["3.8"]              # release cycles; absent = every cycle
+    namespaces: ["test", "dev-*"]
+
+  # Only workloads whose own labels match (Deployment, DaemonSet, ...; or a bare Pod).
+  # With both namespaces and selector, a workload must match both.
+  - products: [nodejs, "Gorilla Toolkit"]
+    selector:
+      matchLabels: {team: legacy}
+```
+
+The chart renders this same file from Helm values. The keys under `scanner:` in `values.yaml` are these keys, so you can paste this block into your values file unchanged.
+
+`workloadKinds` works the same way in Helm values: leave it out (the chart default is `null`) for the default list, or set `[]` to scan every kind.
+
+### Smaller files
+
+These are files as the chart renders them, from Helm values under `scanner:` with the same keys.
+
+Scan everything, daily (an empty file):
+
+```yaml
+{}
+```
+
+Opt-in namespaces, a team label on metrics, twice a day:
+
+```yaml
+namespaceSelector:
+  matchLabels: {xeol-scan: "true"}     # kubectl label ns payments xeol-scan=true
+workloadLabels: [team]
+interval: 12h
+```
+
+Skip system namespaces and internal images:
+
+```yaml
+excludeNamespaces: ["kube-*", "monitoring", "cert-manager"]
+excludeImages:
+  - "registry.internal/*"              # registry.internal/app and registry.internal/team/app
+  - "docker.io/library/busybox"
+```
+
+## Upgrading from the XeolScanner CRD
+
+Older chart versions, from before the config file, configured scanning through a cluster-scoped `XeolScanner` named `default`. The settings are the same, under the same `scanner.*` values. So `helm upgrade` carries them over:
+
+- Helm removes the old `XeolScanner/default` object.
+- Helm creates the ConfigMap.
+
+Helm never deletes CRDs, so remove the old one once yourself:
+
+```bash
+kubectl delete crd xeolscanners.xeol.io --ignore-not-found
+```
+
+Did you manage the CR yourself (e.g. with GitOps)? Then move its `spec` fields into your `scanner:` values. Or put them unchanged into the ConfigMap's `config.yaml`. The field names are the same.

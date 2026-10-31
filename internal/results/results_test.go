@@ -69,3 +69,28 @@ func TestSaveLoadDeleteSurvivesReopen(t *testing.T) {
 		t.Fatal("stale record not pruned")
 	}
 }
+
+func TestVulnsRoundTrip(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "results.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	vulns := []scanner.Vuln{{ID: "CVE-2023-5363", Severity: "HIGH", Package: "libcrypto3", Version: "3.1.2-r0", FixedVersion: "3.1.4-r0"}}
+	for digest, v := range map[string][]scanner.Vuln{"sha256:v": vulns, "sha256:empty": {}, "sha256:never": nil} {
+		if err := db.Save(digest, Record{Scanned: time.Unix(1000, 0), Next: time.Unix(2000, 0), Vulns: v}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, err := db.Load("sha256:v")
+	if err != nil || len(got.Vulns) != 1 || got.Vulns[0] != vulns[0] {
+		t.Fatalf("got %+v, err %v", got.Vulns, err)
+	}
+	// Scanned with nothing found and never scanned with trivy stay distinct.
+	if got, _, _ := db.Load("sha256:empty"); got.Vulns == nil {
+		t.Error("empty vulns loaded as nil")
+	}
+	if got, _, _ := db.Load("sha256:never"); got.Vulns != nil {
+		t.Errorf("never-scanned vulns loaded as %#v", got.Vulns)
+	}
+}

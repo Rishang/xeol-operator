@@ -3,3 +3,12 @@ bin/
 cover.out
 Dockerfile.cross
 *.test
+
+# Real syft, xeol and trivy output for the scanner tests: kept locally only; tests skip without them.
+internal/scanner/testdata/*
+!internal/scanner/testdata/.gitkeep
+
+# Docs site (ui/)
+ui/node_modules/
+ui/dist/
+ui/.astro/

@@ -7,3 +7,16 @@ appVersion: "0.1.0"
 keywords: [eol, end-of-life, xeol, prometheus, grafana, security]
 home: https://github.com/Rishang/xeol-operator
 sources: [https://github.com/Rishang/xeol-operator]
+annotations:
+  # Artifact Hub (https://artifacthub.io/docs/topics/annotations/helm/). The release workflow sets the image tag.
+  artifacthub.io/category: security
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/images: |
+    - name: xeol-operator
+      image: docker.io/rishang/xeol-operator:0.1.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://rishang.github.io/xeol-operator/
+    - name: Source
+      url: https://github.com/Rishang/xeol-operator

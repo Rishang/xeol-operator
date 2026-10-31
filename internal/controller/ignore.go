@@ -24,11 +24,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
-// ignoreRule is a compiled spec.ignoreProducts entry.
+// ignoreRule is a compiled ignoreProducts entry of the config file.
 type ignoreRule struct {
 	products   map[string]bool
 	cycles     map[string]bool // empty = every cycle
@@ -36,7 +36,7 @@ type ignoreRule struct {
 	selector   labels.Selector // nil = every workload
 }
 
-func compileIgnores(specs []xeolv1alpha1.IgnoreRule) ([]ignoreRule, error) {
+func compileIgnores(specs []config.IgnoreRule) ([]ignoreRule, error) {
 	rules := make([]ignoreRule, 0, len(specs))
 	for i, s := range specs {
 		r := ignoreRule{products: lowerSet(s.Products), cycles: lowerSet(s.Cycles), namespaces: s.Namespaces}

@@ -1,0 +1,229 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1064" width="1280" height="1064" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">xeol-operator architecture</title>
+  <desc id="desc">The operator reads its config file (a mounted ConfigMap, reloaded on change), watches Pods, records running image digests in an in-memory Inventory backed by SQLite, scans each digest with syft, then matches the SBOM with xeol (end-of-life software, against a database built from endoflife.date) and, if enabled, trivy (known vulnerabilities, against trivy's database), and serves the results as Prometheus metrics, a JSON API, a web UI and MCP tools.</desc>
+  <style>
+    .bg{fill:#ffffff}
+    .grp{fill:#f4f6f9;stroke:#c9d0da}
+    .k8s{fill:#dbe8fb;stroke:#4a7fd6}
+    .code{fill:#eef0f3;stroke:#8792a2}
+    .sub{fill:#e6dcf8;stroke:#7a52c7}
+    .store{fill:#d8f0de;stroke:#3f9a5a}
+    .ext{fill:#fdecc8;stroke:#d19a1f}
+    .box{stroke-width:1.6}
+    .h{font-size:13px;font-weight:650;fill:#1b2430}
+    .s{font-size:11.5px;fill:#4b5563}
+    .g{font-size:14px;font-weight:700;fill:#1b2430}
+    .gs{font-size:11.5px;fill:#5b6675}
+    .lbl{font-size:11px;fill:#5b6675}
+    .ln{stroke:#5b6675;stroke-width:1.5;fill:none}
+    .num{fill:#b7471f}
+    .numt{font-size:11px;font-weight:700;fill:#ffffff}
+    .tt{font-size:20px;font-weight:700;fill:#1b2430}
+    #ah path{fill:#5b6675}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117}
+      .grp{fill:#161b22;stroke:#30363d}
+      .k8s{fill:#1d3556;stroke:#5b8fe0}
+      .code{fill:#21262d;stroke:#7b8798}
+      .sub{fill:#34285a;stroke:#9a77e0}
+      .store{fill:#1b3d27;stroke:#52b070}
+      .ext{fill:#4a3a14;stroke:#d9a935}
+      .h,.g,.tt{fill:#e6edf3}
+      .s,.gs,.lbl{fill:#9ba7b4}
+      .ln{stroke:#9ba7b4}
+      #ah path{fill:#9ba7b4}
+      .num{fill:#f08a5f}
+      .numt{fill:#0d1117}
+    }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="1064"/>
+  <text class="tt" x="16" y="34">xeol-operator architecture</text>
+
+  <!-- groups -->
+  <rect class="grp" x="16" y="56" width="232" height="984" rx="12"/>
+  <text class="g" x="32" y="82">Kubernetes API</text>
+  <rect class="grp" x="268" y="56" width="664" height="984" rx="12"/>
+  <text class="g" x="288" y="82">xeol-operator pod</text>
+  <text class="gs" x="430" y="82">controllers and the scan queue run on the leader</text>
+  <rect class="grp" x="952" y="56" width="312" height="984" rx="12"/>
+  <text class="g" x="972" y="82">Outside the operator</text>
+
+  <!-- Kubernetes API -->
+  <rect class="box k8s" x="32" y="100" width="200" height="60" rx="8"/>
+  <text class="h" x="44" y="124">ConfigMap (mounted)</text>
+  <text class="s" x="44" y="143">config.yaml: scope, ignore rules</text>
+  <rect class="box k8s" x="32" y="200" width="200" height="60" rx="8"/>
+  <text class="h" x="44" y="224">Pods</text>
+  <text class="s" x="44" y="243">containerStatuses[].imageID</text>
+  <rect class="box k8s" x="32" y="280" width="200" height="60" rx="8"/>
+  <text class="h" x="44" y="304">Workload owners</text>
+  <text class="s" x="44" y="323">RS → Deployment, Job → CronJob</text>
+  <rect class="box k8s" x="32" y="360" width="200" height="60" rx="8"/>
+  <text class="h" x="44" y="384">Namespaces, Nodes,</text>
+  <text class="h" x="44" y="402">ServiceAccounts</text>
+  <rect class="box k8s" x="32" y="500" width="200" height="60" rx="8"/>
+  <text class="h" x="44" y="524">Secrets</text>
+  <text class="s" x="44" y="543">image pull secrets, get per scan</text>
+
+  <!-- operator: config -->
+  <rect class="box code" x="288" y="100" width="210" height="60" rx="8"/>
+  <text class="h" x="300" y="124">Config file watcher</text>
+  <text class="s" x="300" y="143">reloads config.yaml on change</text>
+  <rect class="box code" x="548" y="100" width="200" height="60" rx="8"/>
+  <text class="h" x="560" y="124">Config</text>
+  <text class="s" x="560" y="143">live snapshot of the file</text>
+
+  <!-- operator: discovery and state -->
+  <rect class="box code" x="288" y="200" width="210" height="140" rx="8"/>
+  <text class="h" x="300" y="224">Pod controller</text>
+  <text class="s" x="300" y="246">namespace, kind, image filters</text>
+  <text class="s" x="300" y="266">owner walk to the top workload</text>
+  <text class="s" x="300" y="286">imageID → repo@digest</text>
+  <text class="s" x="300" y="306">node platform, pull secrets</text>
+  <rect class="box store" x="548" y="200" width="200" height="80" rx="8"/>
+  <text class="h" x="560" y="224">Inventory (memory)</text>
+  <text class="s" x="560" y="244">digest → workloads,</text>
+  <text class="s" x="560" y="262">findings, next scan time</text>
+  <rect class="box store" x="778" y="200" width="134" height="80" rx="8"/>
+  <text class="h" x="790" y="224">results.db</text>
+  <text class="s" x="790" y="244">SQLite, /var/lib/</text>
+  <text class="s" x="790" y="262">xeol-operator/</text>
+  <rect class="box code" x="548" y="330" width="200" height="80" rx="8"/>
+  <text class="h" x="560" y="354">Scan queue</text>
+  <text class="s" x="560" y="374">workqueue keyed by digest</text>
+  <text class="s" x="560" y="392">--scan-workers workers</text>
+
+  <!-- operator: scan -->
+  <rect class="grp" x="288" y="450" width="624" height="162" rx="10"/>
+  <text class="h" x="304" y="472">Scan, one digest per worker</text>
+  <rect class="box code" x="304" y="486" width="138" height="96" rx="8"/>
+  <text class="h" x="316" y="508">Scan temp dir</text>
+  <text class="s" x="316" y="528">config.json from</text>
+  <text class="s" x="316" y="544">pull secrets, HOME,</text>
+  <text class="s" x="316" y="560">TMPDIR, marker</text>
+  <rect class="box sub" x="455" y="486" width="138" height="96" rx="8"/>
+  <text class="h" x="467" y="508">syft</text>
+  <text class="s" x="467" y="528">scan registry:</text>
+  <text class="s" x="467" y="544">repo@digest</text>
+  <text class="s" x="467" y="560">→ sbom.json and,</text>
+  <text class="s" x="467" y="576">with trivy, sbom.cdx</text>
+  <rect class="box sub" x="606" y="486" width="138" height="96" rx="8"/>
+  <text class="h" x="618" y="508">xeol (EOL)</text>
+  <text class="s" x="618" y="528">sbom:sbom.json</text>
+  <text class="s" x="618" y="544">-o json -l 10y</text>
+  <text class="s" x="618" y="560">→ EOL findings</text>
+  <rect class="box sub" x="757" y="486" width="138" height="96" rx="8"/>
+  <text class="h" x="769" y="508">trivy (opt-in)</text>
+  <text class="s" x="769" y="528">sbom sbom.cdx.json</text>
+  <text class="s" x="769" y="544">--scanners vuln</text>
+  <text class="s" x="769" y="560">→ vulnerabilities</text>
+
+  <!-- operator: databases -->
+  <rect class="box store" x="606" y="640" width="138" height="60" rx="8"/>
+  <text class="h" x="618" y="664">xeol.db</text>
+  <text class="s" x="618" y="683">xeol/1/xeol.db</text>
+  <rect class="box store" x="757" y="640" width="138" height="60" rx="8"/>
+  <text class="h" x="769" y="664">trivy.db</text>
+  <text class="s" x="769" y="683">trivy/current/db</text>
+  <rect class="box code" x="606" y="730" width="138" height="60" rx="8"/>
+  <text class="h" x="618" y="754">EOL DB manager</text>
+  <text class="s" x="618" y="773">daily build, gate</text>
+  <rect class="box code" x="757" y="730" width="138" height="60" rx="8"/>
+  <text class="h" x="769" y="754">Vuln DB manager</text>
+  <text class="s" x="769" y="773">daily, with trivy</text>
+
+  <!-- operator: http -->
+  <rect class="grp" x="288" y="890" width="624" height="126" rx="10"/>
+  <text class="h" x="304" y="912">Metrics port: one HTTP server, reads Inventory + Config per request</text>
+  <rect class="box code" x="304" y="926" width="140" height="74" rx="8"/>
+  <text class="h" x="316" y="952">/metrics</text>
+  <text class="s" x="316" y="972">Collector</text>
+  <rect class="box code" x="458" y="926" width="140" height="74" rx="8"/>
+  <text class="h" x="470" y="952">/api/v1/*</text>
+  <text class="s" x="470" y="972">JSON API</text>
+  <rect class="box code" x="612" y="926" width="140" height="74" rx="8"/>
+  <text class="h" x="624" y="952">/ and /ui/report</text>
+  <text class="s" x="624" y="972">web UI (opt-in)</text>
+  <rect class="box code" x="766" y="926" width="130" height="74" rx="8"/>
+  <text class="h" x="778" y="952">/mcp</text>
+  <text class="s" x="778" y="972">MCP tools (opt-in)</text>
+
+  <!-- outside -->
+  <rect class="box ext" x="972" y="490" width="272" height="60" rx="8"/>
+  <text class="h" x="984" y="514">Container registries</text>
+  <text class="s" x="984" y="533">image manifests and layers</text>
+  <rect class="box ext" x="972" y="730" width="272" height="60" rx="8"/>
+  <text class="h" x="984" y="754">Trivy DB registries</text>
+  <text class="s" x="984" y="773">mirror.gcr.io, then ghcr.io</text>
+  <rect class="box ext" x="972" y="800" width="272" height="60" rx="8"/>
+  <text class="h" x="984" y="824">endoflife.date</text>
+  <text class="s" x="984" y="843">/api/v1/products/full</text>
+  <rect class="box ext" x="972" y="876" width="272" height="44" rx="8"/>
+  <text class="h" x="984" y="903">Prometheus + alert rules</text>
+  <rect class="box ext" x="972" y="928" width="272" height="44" rx="8"/>
+  <text class="h" x="984" y="955">Grafana (Infinity datasource)</text>
+  <rect class="box ext" x="972" y="980" width="272" height="44" rx="8"/>
+  <text class="h" x="984" y="1007">Browser, AI assistant</text>
+
+  <!-- legend -->
+  <text class="h" x="972" y="116">Legend</text>
+  <rect class="box k8s" x="972" y="128" width="18" height="14" rx="3"/><text class="s" x="998" y="140">Kubernetes object</text>
+  <rect class="box code" x="972" y="152" width="18" height="14" rx="3"/><text class="s" x="998" y="164">Code in the operator process</text>
+  <rect class="box sub" x="972" y="176" width="18" height="14" rx="3"/><text class="s" x="998" y="188">Subprocess (bundled binary)</text>
+  <rect class="box store" x="972" y="200" width="18" height="14" rx="3"/><text class="s" x="998" y="212">State</text>
+  <rect class="box ext" x="972" y="224" width="18" height="14" rx="3"/><text class="s" x="998" y="236">External system</text>
+  <circle class="num" cx="981" cy="262" r="9"/><text class="numt" x="981" y="266" text-anchor="middle">1</text><text class="s" x="998" y="266">Step on the Architecture page</text>
+
+  <!-- arrows -->
+  <path class="ln" d="M232 122 H288" marker-end="url(#ah)"/>
+  <path class="ln" d="M498 130 H548" marker-end="url(#ah)"/>
+  <path class="ln" d="M600 160 V180 H420 V200" marker-end="url(#ah)"/>
+  <text class="lbl" x="430" y="176">changed: re-check every Pod</text>
+  <path class="ln" d="M232 230 H288" marker-end="url(#ah)"/>
+  <path class="ln" d="M232 310 H288" marker-end="url(#ah)"/>
+  <path class="ln" d="M232 390 H262 V330 H288" marker-end="url(#ah)"/>
+  <path class="ln" d="M498 240 H548" marker-end="url(#ah)"/>
+  <path class="ln" d="M748 240 H778" marker-start="url(#ah)" marker-end="url(#ah)"/>
+  <path class="ln" d="M470 340 V370 H548" marker-end="url(#ah)"/>
+  <text class="lbl" x="376" y="388">new digest, not current</text>
+  <path class="ln" d="M648 280 V330" marker-end="url(#ah)"/>
+  <text class="lbl" x="656" y="304">due, every checkInterval</text>
+  <path class="ln" d="M700 410 V450" marker-end="url(#ah)"/>
+  <path class="ln" d="M232 534 H304" marker-end="url(#ah)"/>
+  <path class="ln" d="M442 534 H455" marker-end="url(#ah)"/>
+  <path class="ln" d="M593 534 H606" marker-end="url(#ah)"/>
+  <path class="ln" d="M524 582 V598 H790 V582" marker-end="url(#ah)"/>
+  <path class="ln" d="M912 520 H972" marker-end="url(#ah)"/>
+  <text class="lbl" x="918" y="512">pull (syft)</text>
+  <path class="ln" d="M735 486 V430 H762 V270 H748" marker-end="url(#ah)"/>
+  <path class="ln" d="M826 486 V430 H762"/>
+  <text class="lbl" x="772" y="424">results, next scan time</text>
+  <path class="ln" d="M675 640 V582" marker-end="url(#ah)"/>
+  <path class="ln" d="M860 640 V582" marker-end="url(#ah)"/>
+  <path class="ln" d="M675 730 V700" marker-end="url(#ah)"/>
+  <path class="ln" d="M826 730 V700" marker-end="url(#ah)"/>
+  <path class="ln" d="M675 790 V830 H972" marker-end="url(#ah)"/>
+  <text class="lbl" x="770" y="824">fetch daily</text>
+  <path class="ln" d="M895 760 H972" marker-end="url(#ah)"/>
+  <text class="lbl" x="904" y="752">download</text>
+  <path class="ln" d="M972 898 H912" marker-end="url(#ah)"/>
+  <text class="lbl" x="918" y="892">scrape</text>
+  <path class="ln" d="M972 950 H912" marker-end="url(#ah)"/>
+  <text class="lbl" x="918" y="944">query</text>
+  <path class="ln" d="M972 1002 H912" marker-end="url(#ah)"/>
+  <text class="lbl" x="918" y="996">HTTP</text>
+
+  <!-- step numbers -->
+  <circle class="num" cx="260" cy="110" r="9"/><text class="numt" x="260" y="114" text-anchor="middle">1</text>
+  <circle class="num" cx="260" cy="218" r="9"/><text class="numt" x="260" y="222" text-anchor="middle">2</text>
+  <circle class="num" cx="523" cy="228" r="9"/><text class="numt" x="523" y="232" text-anchor="middle">3</text>
+  <circle class="num" cx="520" cy="358" r="9"/><text class="numt" x="520" y="362" text-anchor="middle">4</text>
+  <circle class="num" cx="720" cy="430" r="9"/><text class="numt" x="720" y="434" text-anchor="middle">5</text>
+  <circle class="num" cx="762" cy="350" r="9"/><text class="numt" x="762" y="354" text-anchor="middle">6</text>
+  <circle class="num" cx="720" cy="830" r="9"/><text class="numt" x="720" y="834" text-anchor="middle">7</text>
+  <circle class="num" cx="940" cy="924" r="9"/><text class="numt" x="940" y="928" text-anchor="middle">8</text>
+</svg>

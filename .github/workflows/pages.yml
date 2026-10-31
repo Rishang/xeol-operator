@@ -1,0 +1,73 @@
+name: Pages
+
+# One GitHub Pages site at https://rishang.github.io/xeol-operator/:
+#   - the docs (Astro Starlight, ui/)
+#   - the Helm repository: index.yaml and charts/xeol-operator-X.Y.Z.tgz, rebuilt on every deploy from the
+#     chart asset of each GitHub release, so nothing is kept in a gh-pages branch
+#   - artifacthub-repo.yml (ui/public/) for Artifact Hub
+# Needs the repo's Pages source set to "GitHub Actions".
+on:
+  push:
+    branches: [main]
+    paths: ['ui/**', '.github/workflows/pages.yml']
+  workflow_call: # from release.yml, once the release's chart is attached
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false # never cut off a release deploy
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITE_URL: https://rishang.github.io/xeol-operator
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6 # version from ui/package.json "packageManager"
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: azure/setup-helm@v5
+      - name: Build docs
+        working-directory: ui
+        run: pnpm install --frozen-lockfile && pnpm exec astro build # broken internal links fail here
+      - name: Helm repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ui/dist/charts
+          # Releases from before the chart was published have no chart asset: skip them.
+          for tag in $(gh release list -R "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName'); do
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" --pattern 'xeol-operator-*.tgz' -D ui/dist/charts 2>/dev/null || true
+          done
+          helm repo index ui/dist --url "$SITE_URL"
+          echo "charts: $(find ui/dist/charts -name "*.tgz" | wc -l)"; grep -E '^\s+version:' ui/dist/index.yaml || true
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ui/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

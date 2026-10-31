@@ -17,11 +17,14 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -35,17 +38,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
 	"github.com/Rishang/xeol-operator/internal/api"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/controller"
 	"github.com/Rishang/xeol-operator/internal/eoldb"
 	"github.com/Rishang/xeol-operator/internal/metrics"
 	"github.com/Rishang/xeol-operator/internal/results"
 	"github.com/Rishang/xeol-operator/internal/scanner"
+	"github.com/Rishang/xeol-operator/internal/vulndb"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -57,7 +62,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(xeolv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -79,6 +83,18 @@ func main() {
 	var serveUI, serveMCP bool
 	var dbSource, dbDir, xeolBin, syftBin, stateDir, eolURL, scanMemoryLimit string
 	var scanMaxProcs int
+	var configPath string
+	flag.StringVar(&configPath, "config", config.DefaultPath,
+		"Scan config file (YAML: namespaceSelector, excludeNamespaces, ...); reloaded when it changes. Missing = defaults.")
+	var eolScan, trivyScan bool
+	var trivyBin, trivyDBDir, trivyDBRepo string
+	flag.BoolVar(&eolScan, "eol", true, "Scan for end-of-life software with xeol.")
+	flag.BoolVar(&trivyScan, "trivy", false, "Scan for vulnerabilities with trivy, on the same syft SBOM.")
+	flag.StringVar(&trivyBin, "trivy-bin", "trivy", "Path to the trivy binary.")
+	flag.StringVar(&trivyDBDir, "trivy-db-dir", "/var/cache/trivy",
+		"trivy database directory: online mode keeps it in current/; mounted mode reads db/trivy.db from it.")
+	flag.StringVar(&trivyDBRepo, "trivy-db-repository", "",
+		"Comma-separated OCI repositories for the trivy DB (online mode); empty uses trivy's defaults.")
 	flag.IntVar(&scanWorkers, "scan-workers", 1, "Concurrent xeol scans; memory use depends on the image.")
 	flag.StringVar(&stateDir, "state-dir", "/var/lib/xeol-operator",
 		"In-flight scan markers; keep it on a volume that survives container restarts to detect OOM kills.")
@@ -89,7 +105,8 @@ func main() {
 	flag.BoolVar(&serveUI, "ui", false, "Serve the HTML UI at / on the metrics port.")
 	flag.BoolVar(&serveMCP, "mcp", false, "Serve the findings as MCP tools (Streamable HTTP) at /mcp on the metrics port.")
 	flag.StringVar(&dbSource, "db-source", "online",
-		"EOL database source: online (build from endoflife.date daily) or mounted (read --db-dir).")
+		"Database source: online (build the EOL DB from endoflife.date and download the trivy DB daily) "+
+			"or mounted (read --db-dir and --trivy-db-dir).")
 	flag.StringVar(&dbDir, "db-dir", "/var/cache/xeol", "xeol database directory; holds 1/xeol.db.")
 	flag.StringVar(&xeolBin, "xeol-bin", "xeol", "Path to the xeol binary.")
 	flag.StringVar(&syftBin, "syft-bin", "syft", "Path to the syft binary that catalogs images for xeol.")
@@ -115,10 +132,15 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	if !eolScan && !trivyScan {
+		setupLog.Error(nil, "at least one of --eol or --trivy must be on")
+		os.Exit(1)
+	}
 	if dbSource != "online" && dbSource != "mounted" {
 		setupLog.Error(nil, "--db-source must be online or mounted", "value", dbSource)
 		os.Exit(1)
 	}
+	online := dbSource == "online"
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -141,7 +163,8 @@ func main() {
 	// - https://book.kubebuilder.io/reference/metrics.html
 	// The JSON API (for Grafana's Infinity datasource), the UI and MCP share the metrics port; the
 	// handler's data fields are filled in once the manager and inventory exist.
-	apiHandler := &api.Handler{Now: time.Now, UI: serveUI, MCP: serveMCP}
+	// The routes depend on the scan types, so they are set before Routes() below.
+	apiHandler := &api.Handler{Now: time.Now, UI: serveUI, MCP: serveMCP, Trivy: trivyScan, EOL: eolScan}
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
 		SecureServing: secureMetrics,
@@ -208,46 +231,76 @@ func main() {
 	}
 	defer func() { _ = resultsDB.Close() }()
 	inventory := controller.NewInventory()
-	config := &controller.Config{Changed: make(chan event.GenericEvent, 1)}
+	scanCfg := &controller.Config{Changed: make(chan event.GenericEvent, 1)}
+	// The config file is loaded before anything starts: a bad file stops the operator instead of scanning
+	// with a guess. Later edits are picked up by the watcher; a bad edit keeps the current config.
+	cfgFile, cfgBytes, err := config.Load(configPath)
+	if err == nil {
+		err = scanCfg.Apply(cfgFile)
+	}
+	if err != nil {
+		setupLog.Error(err, "Invalid config file", "path", configPath)
+		os.Exit(1)
+	}
+	setupLog.Info("config file loaded", "path", configPath)
 	db := &eoldb.Manager{
-		Dir: dbDir, Online: dbSource == "online", URL: eolURL, Client: &http.Client{Timeout: 2 * time.Minute},
+		Dir: dbDir, Online: online, URL: eolURL, Client: &http.Client{Timeout: 2 * time.Minute},
 		Interval: 24 * time.Hour, XeolBin: xeolBin, Log: ctrl.Log.WithName("eoldb"),
 	}
-	xeol := &scanner.Xeol{Bin: xeolBin, Syft: syftBin, DBDir: dbDir, StateDir: stateDir, Timeout: scanTimeout,
+	dbs := scanDBs{}
+	if eolScan {
+		dbs.eol, dbs.all = db, append(dbs.all, db)
+	}
+	xeol := &scanner.Runner{XeolBin: xeolBin, Syft: syftBin, DBDir: dbDir, StateDir: stateDir, Timeout: scanTimeout,
 		MemoryLimit: scanMemoryLimit, MaxProcs: scanMaxProcs, OOMBackoff: 24 * time.Hour,
-		Solo: scanWorkers <= 1}
+		Solo: scanWorkers <= 1, EOL: eolScan}
+	if trivyScan {
+		dbs.vuln = &vulndb.Manager{Dir: trivyDBDir, Online: online, TrivyBin: trivyBin,
+			Interval: 24 * time.Hour, Log: ctrl.Log.WithName("vulndb")}
+		if trivyDBRepo != "" {
+			dbs.vuln.Repositories = strings.Split(trivyDBRepo, ",")
+		}
+		xeol.TrivyBin, xeol.TrivyCacheDir = trivyBin, dbs.vuln.CacheDir()
+		dbs.all = append(dbs.all, dbs.vuln)
+	}
+	// Scans interrupted by a container restart (e.g. an OOM kill) leave their layers and SBOMs behind.
+	if err := xeol.Sweep(); err != nil {
+		setupLog.Error(err, "Failed to remove leftover scan dirs")
+	}
 	queue := &scanner.Queue{
 		Scan: xeol.Scan,
-		Store: &controller.ScanStore{Secrets: mgr.GetAPIReader(), Inventory: inventory, Config: config,
+		Store: &controller.ScanStore{Secrets: mgr.GetAPIReader(), Inventory: inventory, Config: scanCfg,
 			Results: resultsDB, Log: ctrl.Log.WithName("scan")},
 		Workers:    scanWorkers,
 		RetryAfter: time.Hour,
-		Wait:       db.Wait,
+		Wait:       dbs.Wait,
 		Observe:    metrics.Observe,
 		Log:        ctrl.Log.WithName("scan"),
 	}
-	if err := mgr.Add(db); err != nil {
-		setupLog.Error(err, "Failed to add EOL database manager")
-		os.Exit(1)
+	for _, r := range dbs.all {
+		if err := mgr.Add(r); err != nil {
+			setupLog.Error(err, "Failed to add database manager")
+			os.Exit(1)
+		}
 	}
 	if err := mgr.Add(queue); err != nil {
 		setupLog.Error(err, "Failed to add scan queue")
 		os.Exit(1)
 	}
 	if err := (&controller.PodReconciler{
-		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Config: config, Inventory: inventory,
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Config: scanCfg, Inventory: inventory,
 		Results: resultsDB, Enqueue: queue.Add,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pod")
 		os.Exit(1)
 	}
-	if err := (&controller.XeolScannerReconciler{
-		Client: mgr.GetClient(), Config: config, Inventory: inventory, DB: db,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "xeolscanner")
+	if err := mgr.Add(&config.Watcher{Path: configPath, Interval: 5 * time.Second, Last: cfgBytes,
+		Apply: scanCfg.Apply, Failed: scanCfg.SetError, Log: ctrl.Log.WithName("config")}); err != nil {
+		setupLog.Error(err, "Failed to add config watcher")
 		os.Exit(1)
 	}
-	apiHandler.Inventory, apiHandler.Config, apiHandler.DBBuilt = inventory, config, db.Built
+	apiHandler.Inventory, apiHandler.Config = inventory, scanCfg
+	apiHandler.DBBuilt, apiHandler.VulnDBUpdated = dbs.Built, dbs.Updated
 	apiHandler.Leader = func() bool {
 		select {
 		case <-mgr.Elected():
@@ -256,9 +309,8 @@ func main() {
 			return false
 		}
 	}
-	if err := metrics.Register(ctrlmetrics.Registry, &metrics.Collector{
-		Inventory: inventory, Config: config, DBBuilt: db.Built,
-	}); err != nil {
+	collector := &metrics.Collector{Inventory: inventory, Config: scanCfg, DBBuilt: dbs.Built, VulnDBUpdated: dbs.Updated}
+	if err := metrics.Register(ctrlmetrics.Registry, collector); err != nil {
 		setupLog.Error(err, "Failed to register metrics")
 		os.Exit(1)
 	}
@@ -268,7 +320,7 @@ func main() {
 		setupLog.Error(err, "Failed to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("eol-database", db.Ready); err != nil {
+	if err := mgr.AddReadyzCheck("databases", dbs.Ready); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
 		os.Exit(1)
 	}
@@ -278,4 +330,53 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// dbManager is what the EOL and vulnerability database managers have in common (internal/dbloop).
+type dbManager interface {
+	manager.Runnable
+	Wait(context.Context) error
+	Ready(*http.Request) error
+}
+
+// scanDBs is the databases of the enabled scan types; a nil field means that scan type is off.
+type scanDBs struct {
+	eol  *eoldb.Manager
+	vuln *vulndb.Manager
+	all  []dbManager // the enabled ones
+}
+
+// Wait blocks until every enabled database has been usable once: scans need all of them.
+func (d scanDBs) Wait(ctx context.Context) error {
+	for _, m := range d.all {
+		if err := m.Wait(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Ready reports every enabled database that is not ready yet.
+func (d scanDBs) Ready(r *http.Request) error {
+	errs := make([]error, 0, len(d.all))
+	for _, m := range d.all {
+		errs = append(errs, m.Ready(r))
+	}
+	return errors.Join(errs...)
+}
+
+// Updated is the vulnerability database's publish time; an error with vulnerability scanning off.
+func (d scanDBs) Updated() (time.Time, error) {
+	if d.vuln == nil {
+		return time.Time{}, errors.New("vulnerability scanning is off")
+	}
+	return d.vuln.Updated()
+}
+
+// Built is the EOL database's build time; an error with EOL scanning off.
+func (d scanDBs) Built() (time.Time, error) {
+	if d.eol == nil {
+		return time.Time{}, errors.New("EOL scanning is off")
+	}
+	return d.eol.Built()
 }

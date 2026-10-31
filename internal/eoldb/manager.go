@@ -25,13 +25,14 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+
+	"github.com/Rishang/xeol-operator/internal/dbloop"
 )
 
-// StaleAfter is when a DB counts as stale for the DBStale condition and alert.
+// StaleAfter is when a DB counts as stale (the web page's age tone; the XeolDatabaseStale alert has its own threshold).
 const StaleAfter = 30 * 24 * time.Hour
 
 // Manager keeps xeol's DB available. Online mode rebuilds it from endoflife.date on an interval;
@@ -45,75 +46,32 @@ type Manager struct {
 	XeolBin  string
 	Log      logr.Logger
 
-	readyOnce sync.Once
-	ready     chan struct{}
-	initOnce  sync.Once
+	dbloop.Loop
 }
-
-func (m *Manager) init() { m.initOnce.Do(func() { m.ready = make(chan struct{}) }) }
 
 // Start runs until ctx ends. It never returns an error for a failed build: the old DB stays in use.
 func (m *Manager) Start(ctx context.Context) error {
-	m.init()
-	retry := 30 * time.Second
-	for {
-		next := m.Interval
-		var rebuildErr error
-		if m.Online {
+	return m.Run(ctx, dbloop.Spec{Name: "EOL database", Dir: m.Dir, Online: m.Online, Interval: m.Interval, Log: m.Log,
+		Refresh: func(ctx context.Context) error {
 			m.Log.Info("building EOL database from endoflife.date", "url", m.URL)
-			// Build swaps the new DB in only once it is complete, so a failure leaves the old one as is.
-			if rebuildErr = m.rebuild(ctx); rebuildErr != nil {
-				m.Log.Error(rebuildErr, "building EOL database from endoflife.date failed")
+			return m.rebuild(ctx) // Build swaps the new DB in only once it is complete
+		},
+		Check: func(ctx context.Context) (time.Time, error) {
+			if err := m.status(ctx); err != nil {
+				return time.Time{}, err
 			}
-		}
-		if err := m.status(ctx); err != nil {
-			m.Log.Info("EOL database not usable yet", "dir", m.Dir, "reason", err.Error())
-			next = retry
-		} else {
-			// With a usable DB, a failed rebuild waits for the next interval (daily), not the retry.
 			built, _ := m.Built()
-			msg := "EOL database ready"
-			if rebuildErr != nil {
-				msg = "EOL database rebuild failed; keeping the previous one"
-			}
-			m.Log.Info(msg, "dir", m.Dir, "online", m.Online, "built", built.Format(time.RFC3339),
-				"nextCheck", next.String())
-			m.readyOnce.Do(func() { close(m.ready) })
-			if !m.Online {
-				next = time.Hour // mounted: only re-check readiness occasionally
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(next):
-		}
-	}
-}
-
-// NeedLeaderElection is false: every replica needs its own DB copy.
-func (m *Manager) NeedLeaderElection() bool { return false }
-
-// Wait blocks until the DB has been valid at least once.
-func (m *Manager) Wait(ctx context.Context) error {
-	m.init()
-	select {
-	case <-m.ready:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+			return built, nil
+		},
+	})
 }
 
 // Ready is a healthz.Checker: ready once the DB has been valid at least once.
 func (m *Manager) Ready(_ *http.Request) error {
-	m.init()
-	select {
-	case <-m.ready:
-		return nil
-	default:
+	if !m.IsReady() {
 		return errors.New("EOL database not ready")
 	}
+	return nil
 }
 
 // Built is the current DB's build time.

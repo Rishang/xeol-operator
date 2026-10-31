@@ -21,12 +21,17 @@ package metrics
 import (
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Rishang/xeol-operator/internal/controller"
+	"github.com/Rishang/xeol-operator/internal/scanner"
 )
+
+// labelDigest joins every series to xeol_image_workload.
+const labelDigest = "digest"
 
 var (
 	// ScanDuration observes each xeol scan.
@@ -38,14 +43,21 @@ var (
 	// ScanErrors counts failed scans by reason.
 	ScanErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "xeol_scan_errors_total",
-		Help: "Failed scans by reason (auth, not_found, timeout, oom, other).",
+		Help: "Failed scans by reason (auth, not_found, timeout, oom, other, trivy).",
 	}, []string{"reason"})
 
 	eolDesc = prometheus.NewDesc("xeol_eol_date_seconds",
 		"End-of-life date (Unix seconds) of a product found in a running image. Compare with time() in PromQL.",
-		[]string{"image", "digest", "product", "cycle", "package", "version", "url"}, nil)
+		[]string{"image", labelDigest, "product", "cycle", "package", "version", "url"}, nil)
 	dbBuiltDesc = prometheus.NewDesc("xeol_db_built_timestamp_seconds",
 		"When the EOL database in use was built (Unix seconds).", nil, nil)
+	// Counts, not one series per CVE: per-CVE rows are in /api/v1/vulnerabilities.
+	vulnDesc = prometheus.NewDesc("xeol_vulnerabilities",
+		"Known vulnerabilities in a running image digest: unique (CVE, package) rows by severity and whether a fixed version exists. "+
+			"Join on digest with xeol_image_workload.",
+		[]string{labelDigest, "severity", "fixable"}, nil)
+	vulnDBDesc = prometheus.NewDesc("xeol_vuln_db_updated_timestamp_seconds",
+		"When the trivy vulnerability database in use was published (Unix seconds).", nil, nil)
 )
 
 // Observe records one scan; errReason is "" on success. A zero d is a scan that never started
@@ -64,19 +76,27 @@ type Collector struct {
 	Inventory *controller.Inventory
 	Config    *controller.Config
 	DBBuilt   func() (time.Time, error)
+	// VulnDBUpdated is the trivy DB's update time; nil with vulnerability scanning off.
+	VulnDBUpdated func() (time.Time, error)
 }
 
-// Describe sends nothing: the workload metric's labels follow spec.workloadLabels, so this is an unchecked collector.
+// Describe sends nothing: the workload metric's labels follow the config file's workloadLabels, so this is an unchecked collector.
 func (c *Collector) Describe(chan<- *prometheus.Desc) {}
 
-// Collect emits one series per (digest, product, cycle, package, version) and per (digest, workload).
+// Collect emits one series per (digest, product, cycle, package, version), per (digest, severity, fixable)
+// and per (digest, workload).
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if built, err := c.DBBuilt(); err == nil {
 		ch <- prometheus.MustNewConstMetric(dbBuiltDesc, prometheus.GaugeValue, float64(built.Unix()))
 	}
+	if c.VulnDBUpdated != nil {
+		if updated, err := c.VulnDBUpdated(); err == nil {
+			ch <- prometheus.MustNewConstMetric(vulnDBDesc, prometheus.GaugeValue, float64(updated.Unix()))
+		}
+	}
 
 	var keys []string
-	wlLabels := []string{"digest", "namespace", "kind", "name"}
+	wlLabels := []string{labelDigest, "namespace", "kind", "name"}
 	cfg, ok := c.Config.Get()
 	if ok {
 		for _, k := range cfg.WorkloadLabels {
@@ -97,6 +117,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			}
 			ch <- prometheus.MustNewConstMetric(eolDesc, prometheus.GaugeValue, float64(f.EOL.Unix()),
 				img.Ref, img.Digest, f.Product, f.Cycle, f.Package, f.Version, f.URL)
+		}
+		for k, n := range scanner.CountVulns(img.Vulns) { // only non-zero counts become series
+			ch <- prometheus.MustNewConstMetric(vulnDesc, prometheus.GaugeValue, float64(n), img.Digest, k.Severity,
+				strconv.FormatBool(k.Fixable))
 		}
 		for _, w := range img.Workloads {
 			vals := make([]string, 0, 4+len(keys))

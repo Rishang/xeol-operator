@@ -35,6 +35,8 @@ type Record struct {
 	Next      time.Time
 	ErrReason string
 	Findings  []scanner.Finding
+	// Vulns is nil if the digest was never scanned with trivy.
+	Vulns []scanner.Vuln
 }
 
 // retention is how long past its next scan a record is kept for an image that stopped running.
@@ -55,7 +57,8 @@ func Open(path string) (*DB, error) {
 		scanned_at INTEGER NOT NULL,
 		next_at    INTEGER NOT NULL,
 		err_reason TEXT NOT NULL,
-		findings   TEXT NOT NULL
+		findings   TEXT NOT NULL,
+		vulns      TEXT NOT NULL -- JSON; null if never scanned with trivy
 	);
 	CREATE INDEX IF NOT EXISTS results_next_at ON results(next_at)`); err != nil { // for the prune in Save
 		_ = db.Close()
@@ -73,24 +76,28 @@ func (d *DB) Save(digest string, r Record) error {
 	if err != nil {
 		return err
 	}
+	v, err := json.Marshal(r.Vulns)
+	if err != nil {
+		return err
+	}
 	// ponytail: prune on write; rows of images that stopped running (CronJob images between runs
 	// included) stay until they are a week overdue, so a recurring image is restored, not rescanned.
 	if _, err := d.db.Exec(`DELETE FROM results WHERE next_at < ?`, r.Scanned.Add(-retention).Unix()); err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`INSERT INTO results(digest, scanned_at, next_at, err_reason, findings) VALUES (?, ?, ?, ?, ?)
+	_, err = d.db.Exec(`INSERT INTO results(digest, scanned_at, next_at, err_reason, findings, vulns) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(digest) DO UPDATE SET scanned_at = excluded.scanned_at, next_at = excluded.next_at,
-		err_reason = excluded.err_reason, findings = excluded.findings`,
-		digest, r.Scanned.Unix(), r.Next.Unix(), r.ErrReason, string(f))
+		err_reason = excluded.err_reason, findings = excluded.findings, vulns = excluded.vulns`,
+		digest, r.Scanned.Unix(), r.Next.Unix(), r.ErrReason, string(f), string(v))
 	return err
 }
 
 // Load returns a digest's record, or false if it was never saved.
 func (d *DB) Load(digest string) (Record, bool, error) {
 	var scanned, next int64
-	var reason, f string
-	err := d.db.QueryRow(`SELECT scanned_at, next_at, err_reason, findings FROM results WHERE digest = ?`, digest).
-		Scan(&scanned, &next, &reason, &f)
+	var reason, f, v string
+	err := d.db.QueryRow(`SELECT scanned_at, next_at, err_reason, findings, vulns FROM results WHERE digest = ?`, digest).
+		Scan(&scanned, &next, &reason, &f, &v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, nil
 	}
@@ -99,6 +106,9 @@ func (d *DB) Load(digest string) (Record, bool, error) {
 	}
 	r := Record{Scanned: time.Unix(scanned, 0), Next: time.Unix(next, 0), ErrReason: reason}
 	if err := json.Unmarshal([]byte(f), &r.Findings); err != nil {
+		return Record{}, false, err
+	}
+	if err := json.Unmarshal([]byte(v), &r.Vulns); err != nil {
 		return Record{}, false, err
 	}
 	return r, true, nil
