@@ -64,6 +64,25 @@ type Config struct {
 
 	// IgnoreProducts hides accepted findings from metrics and the JSON API. Images are still scanned.
 	IgnoreProducts []IgnoreRule `json:"ignoreProducts,omitempty"`
+
+	// IgnoreVulnerabilities hides accepted vulnerabilities (trivy) the same way.
+	IgnoreVulnerabilities []VulnIgnoreRule `json:"ignoreVulnerabilities,omitempty"`
+}
+
+// VulnIgnoreRule hides vulnerabilities by ID and/or package, optionally only in some namespaces or
+// workloads (Namespaces and Selector work as in IgnoreRule). With both IDs and Packages, both must match.
+type VulnIgnoreRule struct {
+	// IDs are vulnerability IDs as trivy reports them, e.g. "CVE-2024-1234", "GHSA-...". Case-insensitive.
+	IDs []string `json:"ids,omitempty"`
+
+	// Packages are package names as trivy reports them, e.g. "libcrypto3". Case-insensitive.
+	Packages []string `json:"packages,omitempty"`
+
+	// Namespaces limits the rule to namespace name globs. Empty means every namespace.
+	Namespaces []string `json:"namespaces,omitempty"`
+
+	// Selector limits the rule to workloads whose own labels match.
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
 // IgnoreRule hides findings of some products, optionally only some cycles, namespaces or workloads.
@@ -96,6 +115,11 @@ func Parse(b []byte) (Config, error) {
 	for i, r := range c.IgnoreProducts {
 		if len(r.Products) == 0 {
 			return Config{}, fmt.Errorf("parsing config: ignoreProducts[%d]: products is empty", i)
+		}
+	}
+	for i, r := range c.IgnoreVulnerabilities {
+		if len(r.IDs) == 0 && len(r.Packages) == 0 {
+			return Config{}, fmt.Errorf("parsing config: ignoreVulnerabilities[%d]: needs ids or packages", i)
 		}
 	}
 	if c.Interval.Duration == 0 {

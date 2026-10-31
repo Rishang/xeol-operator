@@ -295,6 +295,18 @@ scanner:
 
 Use each product's [endoflife.date](https://endoflife.date) name, e.g. `python`, `nodejs`, `debian`. Not sure of the name? The `url` on each finding links to the product's page, which shows it.
 
+With `trivy.enabled`, accepted vulnerabilities work the same way with `ignoreVulnerabilities`, by CVE ID and/or package:
+
+```yaml
+scanner:
+  ignoreVulnerabilities:
+    - ids: [CVE-2024-1234]           # this CVE everywhere
+    - packages: [libcrypto3]         # this package, only in namespace "test"
+      namespaces: [test]
+```
+
+See [Ignoring vulnerabilities](/xeol-operator/configuration/#ignoring-vulnerabilities).
+
 ## 6. Get alerted
 
 With `prometheusRule.enabled`, the chart installs these alerts:

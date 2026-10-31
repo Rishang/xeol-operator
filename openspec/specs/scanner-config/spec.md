@@ -1,24 +1,9 @@
 # scanner-config Specification
 
 ## Purpose
-Configure scanning through one cluster-scoped `XeolScanner` named `default`, and report the operator's state on it.
+Configure scanning through one YAML file, reloaded without a restart, and report the operator's state through `/api/v1/status`.
 
 ## Requirements
-
-### Requirement: Singleton configuration
-The operator SHALL read its scan configuration only from `XeolScanner/default`. Pod-level settings (workers, memory, DB source, directories) SHALL be operator flags, not CR fields.
-
-#### Scenario: Other names are ignored
-- **WHEN** an `XeolScanner` with another name exists
-- **THEN** it has no effect and gets `Ready=False`, reason `NotSingleton`
-
-#### Scenario: Default deleted
-- **WHEN** `XeolScanner/default` is deleted
-- **THEN** scanning stops and the inventory is cleared, so no metrics are exported
-
-#### Scenario: Empty spec
-- **WHEN** `XeolScanner/default` is created with an empty spec
-- **THEN** every namespace is selected and `interval` defaults to `24h`
 
 ### Requirement: Glob matching
 `excludeNamespaces`, `excludeImages` and `ignoreProducts[].namespaces` SHALL match whole strings, where only `*` (any characters, `/` included) and `?` (one character) are special. Every string SHALL be a valid glob.
@@ -32,15 +17,42 @@ The operator SHALL read its scan configuration only from `XeolScanner/default`. 
 - **THEN** it matches those characters literally and the spec stays valid
 
 ### Requirement: Config changes apply without restart
-A spec change SHALL re-evaluate every Pod; an unchanged spec SHALL NOT. An invalid spec (e.g. a bad label selector) SHALL set `Ready=False`, reason `InvalidSpec`, and keep the previous configuration.
+The operator SHALL notice a changed file within seconds of the kubelet updating it and apply it without a restart. A changed config SHALL re-evaluate every Pod; an unchanged one SHALL NOT. An invalid edit SHALL keep the previous configuration, be logged, and show as `config_error` in `/api/v1/status` until a valid file replaces it.
 
 #### Scenario: New ignore rule
-- **WHEN** an `ignoreProducts` rule is added
-- **THEN** status, metrics and the JSON API reflect it on the next reconcile, with no rescan
+- **WHEN** an `ignoreProducts` rule is added to the ConfigMap
+- **THEN** after the kubelet updates the file, metrics and the JSON API reflect it, with no rescan and no pod restart
+
+#### Scenario: Bad edit
+- **WHEN** the ConfigMap is edited to an invalid selector
+- **THEN** scanning continues with the previous config and `/api/v1/status` has `config_error` set
 
 ### Requirement: Status
-The operator SHALL refresh status every minute with `imagesScanned`, `eolFindings` (findings already past EOL, after ignore rules), `lastSweepTime`, `dbBuilt`, and conditions `Ready` (`DBNotReady` while the DB is unusable) and `DBStale` (DB older than 30 days).
+`/api/v1/status` SHALL report images scanned, findings, the EOL database's build time and age, failed scans, `last_sweep` (when every running image last had a completed scan) and `config_error`; readiness SHALL report whether the databases are usable.
 
 #### Scenario: Stale DB
-- **WHEN** the DB in use was built more than 30 days ago
-- **THEN** `DBStale=True` and scanning continues
+- **WHEN** the EOL database in use was built more than 30 days ago
+- **THEN** `db_age_seconds` shows it, the `XeolDatabaseStale` alert fires, and scanning continues
+
+### Requirement: Configuration file
+The operator SHALL read its scan configuration (`namespaceSelector`, `excludeNamespaces`, `excludeImages`, `interval`, `workloadKinds`, `workloadLabels`, `ignoreProducts`) from one YAML file, `--config` (default `/etc/xeol-operator/config.yaml`), parsed strictly: an unknown field or bad value is an error. Pod-level settings SHALL stay operator flags.
+
+#### Scenario: Rendered by Helm
+- **WHEN** the chart is installed
+- **THEN** `scanner.*` values are rendered into a ConfigMap, mounted at `/etc/xeol-operator/` without `subPath` so the kubelet keeps the file current
+
+#### Scenario: Empty file
+- **WHEN** the file is empty or missing
+- **THEN** every namespace is selected, `interval` is `24h`, and `workloadKinds` is Deployment, StatefulSet, DaemonSet, Job, CronJob
+
+#### Scenario: Every workload kind
+- **WHEN** the file has `workloadKinds: []`
+- **THEN** Pods of every kind are scanned
+
+#### Scenario: Unknown field
+- **WHEN** the file has `interval: 12h` and `intervall: 6h`
+- **THEN** the file is rejected naming `intervall`
+
+#### Scenario: Bad file at startup
+- **WHEN** the operator starts with a file it can't parse
+- **THEN** it exits with the parse error instead of scanning with a guess

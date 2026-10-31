@@ -30,6 +30,7 @@ Every field is optional. With an empty or missing file, the operator scans every
 | `interval` | duration | `24h` | Time from a successful scan of a digest to its next scan. |
 | `workloadKinds` | []string | `[Deployment, StatefulSet, DaemonSet, Job, CronJob]` | Top-level workload kinds to scan. |
 | `ignoreProducts` | []rule | none | Accepted findings to hide; see [Ignoring products](#ignoring-products). |
+| `ignoreVulnerabilities` | []rule | none | Accepted vulnerabilities to hide (trivy); see [Ignoring vulnerabilities](#ignoring-vulnerabilities). |
 | `workloadLabels` | []string | none | Workload label keys to copy onto `xeol_image_workload` as `k8s_label_<key>`. |
 
 More detail on each field:
@@ -53,7 +54,7 @@ More detail on each field:
 
 ### Glob syntax
 
-`excludeNamespaces`, `excludeImages` and `ignoreProducts[].namespaces` take globs. A glob is a pattern with wildcards. Only two characters are special:
+`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces` and `ignoreVulnerabilities[].namespaces` take globs. A glob is a pattern with wildcards. Only two characters are special:
 
 - `*` matches any run of characters, **`/` included**. So `registry.internal/*` matches both `registry.internal/app` and `registry.internal/team/app`.
 - `?` matches exactly one character.
@@ -152,6 +153,36 @@ Example: `python:3.8-slim` runs in `test/python38` and `prod/api`. The rule `{pr
 
 An invalid selector rejects the whole file (see [Errors](#errors)). The previous config stays in effect.
 
+## Ignoring vulnerabilities
+
+With `trivy.enabled`, `ignoreVulnerabilities` does for vulnerabilities what `ignoreProducts` does for EOL findings. Use it for a CVE you've assessed and accepted, or a package that is known noise.
+
+It hides them from `xeol_vulnerabilities`, `/api/v1/vulnerabilities`, the vulnerability counts in status, workloads and namespaces, the web page's Trivy tab and the Grafana trivy dashboard. Images are still scanned, and removing a rule brings the vulnerabilities back with no rescan.
+
+```yaml
+ignoreVulnerabilities:
+  - ids: [CVE-2024-1234]             # this CVE, in any package, everywhere
+  - packages: [libcrypto3]           # every vulnerability in this package...
+    namespaces: [test]               # ...only in these namespaces (globs)
+  - ids: [CVE-2024-5678]
+    packages: [zlib]                 # both given: this CVE in this package only
+    selector:                        # optional: the workload's own labels
+      matchLabels: {team: legacy}
+```
+
+| Rule field | Meaning | Empty means |
+|---|---|---|
+| `ids` | Vulnerability IDs as trivy reports them: `CVE-2024-1234`, `GHSA-...`. Case-insensitive. | any ID |
+| `packages` | Package names as trivy reports them (the `package` column): `libcrypto3`, `openssl`. Case-insensitive. | any package |
+| `namespaces` | Namespace name globs, same syntax as `excludeNamespaces`. | every namespace |
+| `selector` | Label selector on the workload's own `metadata.labels`. | every workload |
+
+- A rule needs `ids`, `packages` or both. A rule with neither is rejected (see [Errors](#errors)).
+- With both, a vulnerability must match both: that CVE in that package.
+- `namespaces` and `selector` work exactly as in `ignoreProducts`, including for images shared between workloads: `xeol_vulnerabilities` is per image digest, so a scoped rule drops a vulnerability from the metric only when it applies to every workload running the image. The API rows and counts hide it for the matching workloads.
+
+There is no VEX or `.trivyignore` support. To hide whole severities, use the severity filters of the API, the web page and the dashboard.
+
 ## Tuning xeol and trivy
 
 syft catalogs each image once, producing an SBOM (a list of the software inside it). Two scanners then read that SBOM:
@@ -198,6 +229,7 @@ Fixed by design:
 | `trivy.dbSizeLimit` | Helm | `5Gi` | Size of the database volume in online mode. |
 | `trivy.mounted.volume`, `trivy.mounted.path` | Helm | none, `/trivy-db` | Read trivy's database from a volume instead of downloading it. |
 | `trivy.dbStaleDays` | Helm | `7` | Age of the trivy database before `XeolVulnDatabaseStale` fires. |
+| `ignoreVulnerabilities` | config file (live) | none | Hides accepted vulnerabilities; see [Ignoring vulnerabilities](#ignoring-vulnerabilities). |
 
 Details:
 
@@ -210,7 +242,7 @@ Fixed by design:
 - Only trivy's vulnerability scanner runs, and only against the SBOM. There's no `trivy image`, and no secret, misconfiguration or license scanning.
 - Only the main database is used, not the Java database.
 - Scans never update the database or call out.
-- There are no vulnerability ignore rules or VEX yet. Filter by severity and fixed version instead, in the web page, Grafana and `/api/v1/vulnerabilities`.
+- Ignore rules are applied at export, not passed to trivy, so changing them needs no rescan. There is no VEX support.
 
 ### Shared by both
 
@@ -339,6 +371,13 @@ ignoreProducts:
   - products: [nodejs, "Gorilla Toolkit"]
     selector:
       matchLabels: {team: legacy}
+
+# Accepted vulnerabilities (trivy.enabled) to hide, the same way. A rule needs ids, packages or both;
+# with both, that CVE in that package. namespaces and selector work as in ignoreProducts.
+ignoreVulnerabilities:
+  - ids: [CVE-2024-1234]         # vulnerability IDs (CVE-..., GHSA-...), case-insensitive
+  - packages: [libcrypto3]       # package names as trivy reports them
+    namespaces: [test]
 ```
 
 The chart renders this same file from Helm values. The keys under `scanner:` in `values.yaml` are these keys, so you can paste this block into your values file unchanged.

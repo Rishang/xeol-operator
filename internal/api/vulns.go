@@ -59,12 +59,13 @@ type VulnRow struct {
 
 func (h *Handler) vulnRows(q query, imgs []controller.Image) []VulnRow {
 	var rows []VulnRow
+	cfg := h.config()
 	for _, img := range imgs {
 		for _, w := range img.Workloads {
 			if !q.match(w) {
 				continue
 			}
-			for _, v := range img.Vulns {
+			for _, v := range cfg.VulnsFor(img.Vulns, w) {
 				if len(q.severities) > 0 && !q.severities[v.Severity] {
 					continue
 				}
@@ -96,23 +97,26 @@ func (h *Handler) vulnStatus(q query, imgs []controller.Image, now time.Time) *V
 		vs.BySeverity[sev] = 0
 	}
 	crit, high := map[string]bool{}, map[string]bool{} // workloads running an image with a CRITICAL / a HIGH
+	cfg := h.config()
 	for _, img := range imgs {
 		if !slices.ContainsFunc(img.Workloads, q.match) {
 			continue
 		}
-		t := scanner.CountVulns(img.Vulns)
+		t := scanner.CountVulns(imageVulns(cfg, q, img))
 		for k, n := range t {
 			vs.BySeverity[k.Severity] += n
 		}
 		vs.FixableCriticalHigh += t.Fixable(sevCritical, sevHigh)
-		hasCrit, hasHigh := t.Severity(sevCritical) > 0, t.Severity(sevHigh) > 0
-		if hasCrit || hasHigh { // "vulnerable" means CRITICAL or HIGH here and in workloads_vulnerable
+		if t.Severity(sevCritical)+t.Severity(sevHigh) > 0 { // "vulnerable": CRITICAL or HIGH, as in workloads_vulnerable
 			vs.ImagesVulnerable++
 		}
 		for _, w := range img.Workloads {
-			if k := workloadKey(w.Namespace, w.Kind, w.Name); q.match(w) {
-				crit[k], high[k] = crit[k] || hasCrit, high[k] || hasHigh
+			if !q.match(w) {
+				continue
 			}
+			wt := scanner.CountVulns(cfg.VulnsFor(img.Vulns, w)) // a workload's own ignore rules
+			k := workloadKey(w.Namespace, w.Kind, w.Name)
+			crit[k], high[k] = crit[k] || wt.Severity(sevCritical) > 0, high[k] || wt.Severity(sevHigh) > 0
 		}
 	}
 	for k := range crit {

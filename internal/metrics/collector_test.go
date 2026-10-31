@@ -151,7 +151,7 @@ func TestCollectVulns(t *testing.T) {
 # HELP xeol_vuln_db_updated_timestamp_seconds When the trivy vulnerability database in use was published (Unix seconds).
 # TYPE xeol_vuln_db_updated_timestamp_seconds gauge
 xeol_vuln_db_updated_timestamp_seconds 1.793232e+09
-# HELP xeol_vulnerabilities Known vulnerabilities in a running image digest: unique (CVE, package) rows by severity and whether a fixed version exists. Join on digest with xeol_image_workload.
+# HELP xeol_vulnerabilities Known vulnerabilities in a running image digest: unique (CVE, package, version) rows by severity and whether a fixed version exists. Join on digest with xeol_image_workload.
 # TYPE xeol_vulnerabilities gauge
 xeol_vulnerabilities{digest="sha256:abc",fixable="false",severity="HIGH"} 1
 xeol_vulnerabilities{digest="sha256:abc",fixable="true",severity="CRITICAL"} 2
@@ -159,6 +159,15 @@ xeol_vulnerabilities{digest="sha256:abc",fixable="true",severity="CRITICAL"} 2
 	// No MEDIUM/LOW series and no CRITICAL/fixable=false series: zero counts are omitted.
 	if err := testutil.CollectAndCompare(c, strings.NewReader(want), "xeol_vulnerabilities", "xeol_vuln_db_updated_timestamp_seconds"); err != nil {
 		t.Fatal(err)
+	}
+	// An ignore rule drops CVE-3 from the metric; nothing is rescanned.
+	snap, err := controller.SnapshotFrom(&config.Config{IgnoreVulnerabilities: []config.VulnIgnoreRule{{IDs: []string{"CVE-3"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Config.Set(snap)
+	if n := testutil.CollectAndCount(c, "xeol_vulnerabilities"); n != 1 {
+		t.Fatalf("with CVE-3 ignored: %d series, want 1 (CRITICAL fixable)", n)
 	}
 	inv.DeletePod(pod)
 	if n := testutil.CollectAndCount(c, "xeol_vulnerabilities"); n != 0 {

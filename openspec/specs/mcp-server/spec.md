@@ -1,8 +1,10 @@
 # mcp-server Specification
 
 ## Purpose
-TBD - created by archiving change add-ui-and-mcp. Update Purpose after archive.
+Let AI assistants query the operator's current EOL findings through read-only MCP tools, served by the operator on its metrics port.
+
 ## Requirements
+
 ### Requirement: MCP endpoint
 When started with `--mcp` (Helm `mcp.enabled=true`), the operator SHALL serve a stateless Streamable HTTP MCP server at `/mcp` on the metrics port, with read-only tools `status`, `namespaces`, `workloads` and `findings`. Without `--mcp`, `/mcp` SHALL return 404.
 

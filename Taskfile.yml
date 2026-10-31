@@ -155,6 +155,7 @@ tasks:
       - helm template t {{.CHART}} --set db.source=mounted,db.mounted.volume.persistentVolumeClaim.claimName=xeol-db > /dev/null
       - helm template t {{.CHART}} --set db.source=mounted,db.mounted.initContainer.image=registry.local/xeol-db:latest > /dev/null
       - helm template t {{.CHART}} --set-json 'scanner.ignoreProducts=[{"products":["perl"],"namespaces":["test"]}]' | grep -q 'ignoreProducts'
+      - helm template t {{.CHART}} --set-json 'scanner.ignoreVulnerabilities=[{"ids":["CVE-2024-1234"]}]' | grep -q 'ignoreVulnerabilities'
       # null (default) leaves workloadKinds out; [] must reach the file, where it means every kind
       - test "$(helm template t {{.CHART}} -s templates/configmap.yaml | grep -c workloadKinds)" = 0
       - helm template t {{.CHART}} -s templates/configmap.yaml --set-json 'scanner.workloadKinds=[]' | grep -A1 workloadKinds | grep -q '\[\]'

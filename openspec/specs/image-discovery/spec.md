@@ -43,7 +43,7 @@ When no running Pod uses a digest any more, it SHALL drop out of the inventory, 
 - **THEN** its saved findings are restored with no rescan
 
 ### Requirement: Workload kind allowlist
-The operator SHALL track a Pod only when its top-level workload kind is in `spec.workloadKinds` (default `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `CronJob`; exact, case-sensitive). An empty list SHALL mean every kind. A change to the list SHALL re-evaluate every Pod.
+The operator SHALL track a Pod only when its top-level workload kind is in the config file's `workloadKinds` (default `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `CronJob`; exact, case-sensitive). An empty list SHALL mean every kind. A change to the list SHALL re-evaluate every Pod.
 
 #### Scenario: Operator-managed kind
 - **WHEN** a Pod's top-level owner is a `Prometheus` and `workloadKinds` is the default

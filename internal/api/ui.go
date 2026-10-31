@@ -197,13 +197,13 @@ func packageZones(all, shown []VulnRow, filtered bool) []pkgZone {
 
 // severityCells lists every severity, zeros included, with the images (and their workloads) that have
 // it, for the wide tile's info tooltips. Counts match the status's by_severity.
-func severityCells(q query, imgs []controller.Image, by map[string]int) []reasonCell {
+func severityCells(cfg controller.ConfigSnapshot, q query, imgs []controller.Image, by map[string]int) []reasonCell {
 	cells := make([]reasonCell, 0, len(scanner.Severities))
 	for _, sev := range scanner.Severities {
 		c := reasonCell{Reason: sev, N: by[sev]}
 		for _, img := range imgs {
 			if !slices.ContainsFunc(img.Workloads, q.match) ||
-				!slices.ContainsFunc(img.Vulns, func(v scanner.Vuln) bool { return v.Severity == sev }) {
+				!slices.ContainsFunc(imageVulns(cfg, q, img), func(v scanner.Vuln) bool { return v.Severity == sev }) {
 				continue
 			}
 			var wls []string
@@ -475,7 +475,7 @@ func (h *Handler) trivyReport(rep *report, q query, v url.Values) {
 	slices.SortStableFunc(rep.Workloads, func(a, b WorkloadRow) int { return a.worstFirst(b.VulnCounts) })
 	slices.SortStableFunc(rep.ByNS, func(a, b NamespaceRow) int { return a.vulnCounts().worstFirst(b.vulnCounts()) })
 	if vs := rep.Status.Vulnerabilities; vs != nil {
-		rep.SevCells = severityCells(q, imgs, vs.BySeverity)
+		rep.SevCells = severityCells(h.config(), q, imgs, vs.BySeverity)
 	}
 	if rep.Fixable == "only" {
 		rep.Vulns = slices.DeleteFunc(rep.Vulns, func(r VulnRow) bool { return r.FixedVersion == "" })

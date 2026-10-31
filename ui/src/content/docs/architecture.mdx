@@ -185,7 +185,7 @@ One HTTP server on the metrics port serves everything. It reads the Inventory an
 | `/`, `/ui/report` | Server-rendered web page | `ui.enabled` |
 | `/mcp` | `status`, `namespaces`, `workloads` and `findings` as MCP tools (Streamable HTTP) | `mcp.enabled` |
 
-`ignoreProducts` rules are applied here, at export time. So changing them takes effect without a rescan.
+`ignoreProducts` and `ignoreVulnerabilities` rules are applied here, at export time. So changing them takes effect without a rescan.
 
 The metrics come from a custom collector. It builds every series from the Inventory on each scrape. When an image stops running, there is nothing to delete: its series simply stop appearing.
 

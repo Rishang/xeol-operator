@@ -264,6 +264,7 @@ Either way, three things tell you when the data is old: `xeol_db_built_timestamp
 | `scanner.workloadKinds` | `null` (Deployment, StatefulSet, DaemonSet, Job, CronJob); `[]` = every kind | `workloadKinds` |
 | `scanner.workloadLabels` | `[]` | `workloadLabels` |
 | `scanner.ignoreProducts` | `[]` | `ignoreProducts` (accepted findings to hide) |
+| `scanner.ignoreVulnerabilities` | `[]` | `ignoreVulnerabilities` (accepted vulnerabilities to hide, with trivy) |
 
 The chart renders these into the ConfigMap `xeol-operator-config`. The operator reloads it without a restart. For field behaviour, globs, live reload and errors, see [Configuration](/xeol-operator/configuration/).
 

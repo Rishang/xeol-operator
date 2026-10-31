@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rishang/xeol-operator/internal/config"
+	"github.com/Rishang/xeol-operator/internal/controller"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
@@ -130,4 +132,36 @@ func raw(t *testing.T, h http.Handler, url string) string {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
 	return rec.Body.String()
+}
+
+func TestVulnIgnore(t *testing.T) {
+	hd := newTrivyHandler(t)
+	snap, err := controller.SnapshotFrom(&config.Config{IgnoreVulnerabilities: []config.VulnIgnoreRule{
+		{IDs: []string{"cve-1"}}, // everywhere
+		{Packages: []string{"libssl3"}, Namespaces: []string{"test"}}, // python runs only in test: hidden for the image too
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hd.Config.Set(snap)
+	h := serve(hd)
+	var rows []VulnRow
+	get(t, h, "/api/v1/vulnerabilities", &rows)
+	if len(rows) != 2 || rows[0].ID != "CVE-3" || rows[1].ID != "CVE-4" {
+		t.Fatalf("rows = %+v, want node's CVE-3 and CVE-4 only", rows)
+	}
+	var s Status
+	get(t, h, "/api/v1/status", &s)
+	want := map[string]int{"CRITICAL": 0, "HIGH": 1, "MEDIUM": 0, "LOW": 1, "UNKNOWN": 0}
+	if v := s.Vulnerabilities; !maps.Equal(v.BySeverity, want) || v.ImagesVulnerable != 1 || v.WorkloadsCritical != 0 ||
+		v.WorkloadsHigh != 1 || v.FixableCriticalHigh != 1 {
+		t.Errorf("status %+v", v)
+	}
+	var wls []WorkloadRow
+	get(t, h, "/api/v1/workloads", &wls)
+	for _, w := range wls {
+		if w.Namespace == "test" && w.VulnCounts != nil && w.VulnCritical+w.VulnHigh+w.VulnFixable != 0 {
+			t.Errorf("python workload still counts ignored vulns: %+v", w)
+		}
+	}
 }

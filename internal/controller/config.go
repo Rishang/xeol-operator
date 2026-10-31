@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/Rishang/xeol-operator/internal/config"
+	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
 // ConfigSnapshot is the parsed config file.
@@ -40,7 +41,10 @@ type ConfigSnapshot struct {
 	WorkloadLabels    []string
 	// IgnoreProducts is the raw config, kept to detect changes; ignores holds it compiled.
 	IgnoreProducts []config.IgnoreRule
-	ignores        []ignoreRule
+	ignores        []rule[scanner.Finding]
+	// IgnoreVulnerabilities is the raw config, kept to detect changes; vulnIgnores holds it compiled.
+	IgnoreVulnerabilities []config.VulnIgnoreRule
+	vulnIgnores           []rule[scanner.Vuln]
 }
 
 // Config holds the live scan config, shared by the controllers, scan queue and metrics.
@@ -96,7 +100,8 @@ func (c *Config) Apply(cfg config.Config) error {
 		!slices.Equal(prev.ExcludeImages, snap.ExcludeImages) || !slices.Equal(prev.WorkloadLabels, snap.WorkloadLabels) ||
 		!slices.Equal(prev.WorkloadKinds, snap.WorkloadKinds) ||
 		prev.NamespaceSelector.String() != snap.NamespaceSelector.String() ||
-		!equality.Semantic.DeepEqual(prev.IgnoreProducts, snap.IgnoreProducts)
+		!equality.Semantic.DeepEqual(prev.IgnoreProducts, snap.IgnoreProducts) ||
+		!equality.Semantic.DeepEqual(prev.IgnoreVulnerabilities, snap.IgnoreVulnerabilities)
 	c.Set(snap)
 	if changed {
 		// After Set: Pods reconciled before this point saw no (or the old) config.
@@ -123,11 +128,16 @@ func SnapshotFrom(cfg *config.Config) (ConfigSnapshot, error) {
 	if err != nil {
 		return ConfigSnapshot{}, err
 	}
+	vulnIgnores, err := compileVulnIgnores(cfg.IgnoreVulnerabilities)
+	if err != nil {
+		return ConfigSnapshot{}, err
+	}
 	interval := cfg.Interval.Duration
 	if interval <= 0 { // a Config built in code rather than by config.Parse
 		interval = config.DefaultInterval
 	}
 	return ConfigSnapshot{NamespaceSelector: sel, ExcludeNamespaces: cfg.ExcludeNamespaces,
 		ExcludeImages: cfg.ExcludeImages, Interval: interval, WorkloadKinds: cfg.WorkloadKinds, WorkloadLabels: cfg.WorkloadLabels,
-		IgnoreProducts: cfg.IgnoreProducts, ignores: ignores}, nil
+		IgnoreProducts: cfg.IgnoreProducts, ignores: ignores,
+		IgnoreVulnerabilities: cfg.IgnoreVulnerabilities, vulnIgnores: vulnIgnores}, nil
 }

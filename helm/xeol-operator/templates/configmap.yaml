@@ -29,3 +29,6 @@ data:
     {{- with .Values.scanner.ignoreProducts }}
     ignoreProducts: {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.scanner.ignoreVulnerabilities }}
+    ignoreVulnerabilities: {{- toYaml . | nindent 6 }}
+    {{- end }}

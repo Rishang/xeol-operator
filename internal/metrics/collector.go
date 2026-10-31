@@ -53,7 +53,7 @@ var (
 		"When the EOL database in use was built (Unix seconds).", nil, nil)
 	// Counts, not one series per CVE: per-CVE rows are in /api/v1/vulnerabilities.
 	vulnDesc = prometheus.NewDesc("xeol_vulnerabilities",
-		"Known vulnerabilities in a running image digest: unique (CVE, package) rows by severity and whether a fixed version exists. "+
+		"Known vulnerabilities in a running image digest: unique (CVE, package, version) rows by severity and whether a fixed version exists. "+
 			"Join on digest with xeol_image_workload.",
 		[]string{labelDigest, "severity", "fixable"}, nil)
 	vulnDBDesc = prometheus.NewDesc("xeol_vuln_db_updated_timestamp_seconds",
@@ -118,7 +118,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(eolDesc, prometheus.GaugeValue, float64(f.EOL.Unix()),
 				img.Ref, img.Digest, f.Product, f.Cycle, f.Package, f.Version, f.URL)
 		}
-		for k, n := range scanner.CountVulns(img.Vulns) { // only non-zero counts become series
+		for k, n := range scanner.CountVulns(cfg.ImageVulns(img.Vulns, img.Workloads)) { // only non-zero counts become series
 			ch <- prometheus.MustNewConstMetric(vulnDesc, prometheus.GaugeValue, float64(n), img.Digest, k.Severity,
 				strconv.FormatBool(k.Fixable))
 		}

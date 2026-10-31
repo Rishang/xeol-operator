@@ -41,10 +41,11 @@ func TestParse(t *testing.T) {
 		t.Fatalf("got %+v, %v", c, err)
 	}
 	for in, want := range map[string]string{
-		"interval: 12h\nintervall: 6h\n":            "intervall",
-		"interval: soon\n":                          "\"soon\"",
-		"interval: -1h\n":                           "negative",
-		"ignoreProducts:\n  - namespaces: [test]\n": "products is empty",
+		"interval: 12h\nintervall: 6h\n":                   "intervall",
+		"interval: soon\n":                                 "\"soon\"",
+		"interval: -1h\n":                                  "negative",
+		"ignoreProducts:\n  - namespaces: [test]\n":        "products is empty",
+		"ignoreVulnerabilities:\n  - namespaces: [test]\n": "needs ids or packages",
 	} {
 		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: error %v, want one naming %q", in, err, want)

@@ -15,7 +15,7 @@ xeol-operator scans every image running in your Kubernetes cluster, finds runtim
 - **Gives dates, not just labels.** Every finding has its EOL date and days left, so "due within 90 days" is just a query.
 - **Fits the tools you already have.** It ships Prometheus metrics, ready-made alert rules and a Grafana dashboard with the Helm chart. Without Grafana, turn on the built-in web page or MCP tools for AI assistants.
 - **Uses EOL data that's kept up to date.** It builds its database daily from [endoflife.date](https://endoflife.date), covering language runtimes, databases, frameworks and distros (Debian, Alpine, Ubuntu, ...).
-- **Finds CVEs too, at little extra cost.** With `trivy.enabled`, trivy matches the SBOM already built for the EOL scan, so images aren't pulled twice. It adds about 0.2 s and 150 MB per image.
+- **Finds CVEs too, at little extra cost.** With `trivy.enabled`, trivy matches the SBOM already built for the EOL scan, so images aren't pulled twice. It adds about 0.2 s and 150 MB per image. CVEs you've accepted can be hidden by ID or package, like accepted EOL products.
 - **Is light to run.** It's one read-only pod with no database or extra services, and it works in air-gapped clusters too.
 
 ## Quick start
@@ -111,6 +111,8 @@ scanner:
   ignoreProducts:                # accepted findings, hidden everywhere
     - products: [perl]           # endoflife.date name
       namespaces: [test]         # optional; also cycles, selector
+  ignoreVulnerabilities:         # accepted vulnerabilities (trivy), same scoping
+    - ids: [CVE-2024-1234]       # and/or packages: [libcrypto3]
 ```
 
 Changes apply without a restart, from `helm upgrade` or `kubectl edit configmap xeol-operator-config`; a bad edit is rejected and the previous config stays ([Configuration](https://rishang.github.io/xeol-operator/configuration/)). Memory, timeouts, workers and the air-gapped DB are covered in [Helm setup](https://rishang.github.io/xeol-operator/helm/).

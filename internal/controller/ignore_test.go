@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -111,5 +112,50 @@ func TestSnapshotInvalidIgnore(t *testing.T) {
 		if _, err := SnapshotFrom(&config.Config{IgnoreProducts: []config.IgnoreRule{r}}); err == nil {
 			t.Errorf("SnapshotFrom(%+v): want error", r)
 		}
+	}
+}
+
+func TestIgnoreVulnerabilities(t *testing.T) {
+	snap, err := SnapshotFrom(&config.Config{IgnoreVulnerabilities: []config.VulnIgnoreRule{
+		{IDs: []string{"cve-2024-0001"}},                                 // by ID, any case, everywhere
+		{Packages: []string{"LIBCRYPTO3"}, Namespaces: []string{"test"}}, // by package, one namespace
+		{IDs: []string{"CVE-2024-0003"}, Packages: []string{"zlib"}},     // both must match
+		{Packages: []string{"perl-base"}, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "legacy"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		byID      = scanner.Vuln{ID: "CVE-2024-0001", Package: "openssl"}
+		crypto    = scanner.Vuln{ID: "CVE-2024-0002", Package: "libcrypto3"}
+		zlibMatch = scanner.Vuln{ID: "CVE-2024-0003", Package: "zlib"}
+		zlibOther = scanner.Vuln{ID: "CVE-2024-0004", Package: "zlib"}
+		perlBase  = scanner.Vuln{ID: "CVE-2024-0005", Package: "perl-base"}
+		all       = []scanner.Vuln{byID, crypto, zlibMatch, zlibOther, perlBase}
+	)
+	ids := func(vs []scanner.Vuln) (out []string) {
+		for _, v := range vs {
+			out = append(out, v.ID)
+		}
+		return out
+	}
+	for _, tt := range []struct {
+		name string
+		got  []scanner.Vuln
+		want []string
+	}{
+		{"test workload", snap.VulnsFor(all, py38), []string{"CVE-2024-0004", "CVE-2024-0005"}},
+		{"other namespace", snap.VulnsFor(all, grafana), []string{"CVE-2024-0002", "CVE-2024-0004", "CVE-2024-0005"}},
+		{"selector", snap.VulnsFor(all, legacyPay), []string{"CVE-2024-0002", "CVE-2024-0004"}},
+		// libcrypto3 is hidden in test only, so an image shared with monitoring keeps it in metrics.
+		{"shared image", snap.ImageVulns(all, []Workload{py38, grafana}), []string{"CVE-2024-0002", "CVE-2024-0004", "CVE-2024-0005"}},
+		{"image only in test", snap.ImageVulns(all, []Workload{py38, py38Agent}), []string{"CVE-2024-0004", "CVE-2024-0005"}},
+	} {
+		if got := ids(tt.got); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if none := (ConfigSnapshot{}).VulnsFor(all, py38); &none[0] != &all[0] {
+		t.Error("no rules: want the input slice back, not a copy")
 	}
 }

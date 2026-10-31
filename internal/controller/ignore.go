@@ -28,26 +28,93 @@ import (
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
-// ignoreRule is a compiled ignoreProducts entry of the config file.
-type ignoreRule struct {
-	products   map[string]bool
-	cycles     map[string]bool // empty = every cycle
+// scope is where an ignore rule applies: namespace globs and a workload label selector.
+type scope struct {
 	namespaces []string        // globs; empty = every namespace
 	selector   labels.Selector // nil = every workload
 }
 
-func compileIgnores(specs []config.IgnoreRule) ([]ignoreRule, error) {
-	rules := make([]ignoreRule, 0, len(specs))
-	for i, s := range specs {
-		r := ignoreRule{products: lowerSet(s.Products), cycles: lowerSet(s.Cycles), namespaces: s.Namespaces}
-		if s.Selector != nil {
-			sel, err := metav1.LabelSelectorAsSelector(s.Selector)
-			if err != nil {
-				return nil, fmt.Errorf("ignoreProducts[%d].selector: %w", i, err)
-			}
-			r.selector = sel
+func newScope(field string, i int, namespaces []string, sel *metav1.LabelSelector) (scope, error) {
+	sc := scope{namespaces: namespaces}
+	if sel != nil {
+		var err error
+		if sc.selector, err = metav1.LabelSelectorAsSelector(sel); err != nil {
+			return scope{}, fmt.Errorf("%s[%d].selector: %w", field, i, err)
 		}
-		rules = append(rules, r)
+	}
+	return sc, nil
+}
+
+func (sc scope) global() bool { return len(sc.namespaces) == 0 && sc.selector == nil }
+
+func (sc scope) appliesTo(w Workload) bool {
+	return (len(sc.namespaces) == 0 || excluded(sc.namespaces, w.Namespace)) &&
+		(sc.selector == nil || sc.selector.Matches(labels.Set(w.Labels)))
+}
+
+// rule is a compiled ignore rule: what it hides (match) and where (scope).
+type rule[T any] struct {
+	scope
+	match func(T) bool
+}
+
+// hiddenFor reports whether x is hidden for workload w.
+func hiddenFor[T any](rules []rule[T], x T, w Workload) bool {
+	for _, r := range rules {
+		if r.match(x) && r.appliesTo(w) {
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenForImage reports whether x is hidden for an image as a whole: by a global rule, or for every
+// workload running it. Metrics are per digest, so a rule scoped to some of its workloads keeps it there.
+func hiddenForImage[T any](rules []rule[T], x T, workloads []Workload) bool {
+	for _, r := range rules {
+		if r.match(x) && r.global() {
+			return true
+		}
+	}
+	if len(workloads) == 0 {
+		return false
+	}
+	for _, w := range workloads {
+		if !hiddenFor(rules, x, w) {
+			return false
+		}
+	}
+	return true
+}
+
+func compileIgnores(specs []config.IgnoreRule) ([]rule[scanner.Finding], error) {
+	rules := make([]rule[scanner.Finding], 0, len(specs))
+	for i, s := range specs {
+		sc, err := newScope("ignoreProducts", i, s.Namespaces, s.Selector)
+		if err != nil {
+			return nil, err
+		}
+		products, cycles := lowerSet(s.Products), lowerSet(s.Cycles)
+		rules = append(rules, rule[scanner.Finding]{scope: sc, match: func(f scanner.Finding) bool {
+			// Either the slug ("gorilla") or the display name ("Gorilla Toolkit"), as shown on the dashboard.
+			return (products[productSlug(f)] || products[strings.ToLower(f.Product)]) &&
+				(len(cycles) == 0 || cycles[strings.ToLower(f.Cycle)])
+		}})
+	}
+	return rules, nil
+}
+
+func compileVulnIgnores(specs []config.VulnIgnoreRule) ([]rule[scanner.Vuln], error) {
+	rules := make([]rule[scanner.Vuln], 0, len(specs))
+	for i, s := range specs {
+		sc, err := newScope("ignoreVulnerabilities", i, s.Namespaces, s.Selector)
+		if err != nil {
+			return nil, err
+		}
+		ids, pkgs := lowerSet(s.IDs), lowerSet(s.Packages)
+		rules = append(rules, rule[scanner.Vuln]{scope: sc, match: func(v scanner.Vuln) bool {
+			return (len(ids) == 0 || ids[strings.ToLower(v.ID)]) && (len(pkgs) == 0 || pkgs[strings.ToLower(v.Package)])
+		}})
 	}
 	return rules, nil
 }
@@ -68,42 +135,37 @@ func productSlug(f scanner.Finding) string {
 	return strings.ToLower(f.Product)
 }
 
-func (r ignoreRule) global() bool { return len(r.namespaces) == 0 && r.selector == nil }
-
-func (r ignoreRule) matches(f scanner.Finding) bool {
-	// Either the slug ("gorilla") or the display name ("Gorilla Toolkit"), as shown on the dashboard.
-	return (r.products[productSlug(f)] || r.products[strings.ToLower(f.Product)]) && (len(r.cycles) == 0 || r.cycles[strings.ToLower(f.Cycle)])
-}
-
-func (r ignoreRule) appliesTo(w Workload) bool {
-	return (len(r.namespaces) == 0 || excluded(r.namespaces, w.Namespace)) &&
-		(r.selector == nil || r.selector.Matches(labels.Set(w.Labels)))
-}
-
 // IgnoredFor reports whether f is hidden for workload w.
 func (s ConfigSnapshot) IgnoredFor(f scanner.Finding, w Workload) bool {
-	for _, r := range s.ignores {
-		if r.matches(f) && r.appliesTo(w) {
-			return true
-		}
-	}
-	return false
+	return hiddenFor(s.ignores, f, w)
 }
 
 // Ignored reports whether f is hidden for an image as a whole: by a global rule, or for every workload running it.
 func (s ConfigSnapshot) Ignored(f scanner.Finding, workloads []Workload) bool {
-	for _, r := range s.ignores {
-		if r.matches(f) && r.global() {
-			return true
+	return hiddenForImage(s.ignores, f, workloads)
+}
+
+// VulnsFor is an image's vulnerabilities as workload w sees them: without those its rules hide.
+func (s ConfigSnapshot) VulnsFor(vulns []scanner.Vuln, w Workload) []scanner.Vuln {
+	return s.keepVulns(vulns, func(v scanner.Vuln) bool { return !hiddenFor(s.vulnIgnores, v, w) })
+}
+
+// ImageVulns is an image's vulnerabilities for per-digest views (metrics, image counts): without those
+// hidden by a global rule or for every workload running it.
+func (s ConfigSnapshot) ImageVulns(vulns []scanner.Vuln, workloads []Workload) []scanner.Vuln {
+	return s.keepVulns(vulns, func(v scanner.Vuln) bool { return !hiddenForImage(s.vulnIgnores, v, workloads) })
+}
+
+// keepVulns returns vulns unchanged (no copy) when there are no rules.
+func (s ConfigSnapshot) keepVulns(vulns []scanner.Vuln, keep func(scanner.Vuln) bool) []scanner.Vuln {
+	if len(s.vulnIgnores) == 0 {
+		return vulns
+	}
+	out := make([]scanner.Vuln, 0, len(vulns))
+	for _, v := range vulns {
+		if keep(v) {
+			out = append(out, v)
 		}
 	}
-	if len(workloads) == 0 {
-		return false
-	}
-	for _, w := range workloads {
-		if !s.IgnoredFor(f, w) {
-			return false
-		}
-	}
-	return true
+	return out
 }

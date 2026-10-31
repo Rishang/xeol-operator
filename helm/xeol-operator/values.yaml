@@ -38,6 +38,12 @@ scanner:
   #   - products: [python]
   #     cycles: ["3.8"]                                    # optional release cycles
   ignoreProducts: []
+  # Accepted vulnerabilities (trivy.enabled) hidden the same way. A rule needs ids, packages or both
+  # (both: that CVE in that package); namespaces and selector work as above.
+  #   - ids: [CVE-2024-1234]
+  #   - packages: [libcrypto3]
+  #     namespaces: [test]
+  ignoreVulnerabilities: []
   # Operator flags. A scan's memory depends on the image (small images ~200Mi); an image that needs
   # more than the pod's memory limit is skipped for 24h and reported as xeol_scan_errors_total{reason="oom"}.
   workers: 1

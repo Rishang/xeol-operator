@@ -31,7 +31,7 @@ helm install xeol-operator xeol-operator/xeol-operator -n xeol-system --create-n
 		Every finding has its EOL date and the days left. So "due within 90 days" is just a query. The EOL data is rebuilt daily from endoflife.date.
 	</Card>
 	<Card title="Known vulnerabilities too" icon="warning">
-		Turn on `trivy.enabled` to check for CVEs too. Trivy reuses the SBOM (software bill of materials) from the EOL scan. There's no second image pull, and it takes about 0.2 s and 150 MB per image.
+		Turn on `trivy.enabled` to check for CVEs too. Trivy reuses the SBOM (software bill of materials) from the EOL scan. There's no second image pull, and it takes about 0.2 s and 150 MB per image. Hide CVEs you've accepted by ID or package.
 	</Card>
 	<Card title="Fits your stack" icon="puzzle">
 		The chart ships Prometheus metrics, alert rules and Grafana dashboards. No Grafana? Use the built-in web page or the MCP tools.

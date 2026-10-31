@@ -19,7 +19,7 @@ In:
 - For clusters without Grafana: an optional built-in HTML UI (`ui.enabled`) and MCP over HTTP (`mcp.enabled`).
 
 Out (until asked for):
-- Vulnerability scanning beyond `trivy sbom` on the syft SBOM: no `trivy image` scans (`trivy image --download-db-only` only fetches the DB, `internal/vulndb`), no secret/misconfig/license scanners, no vulnerability ignore rules or VEX.
+- Vulnerability scanning beyond `trivy sbom` on the syft SBOM: no `trivy image` scans (`trivy image --download-db-only` only fetches the DB, `internal/vulndb`), no secret/misconfig/license scanners, no VEX. Accepted vulnerabilities are hidden at export by `ignoreVulnerabilities`, not passed to trivy.
 - An external database, or pushing to Grafana. Grafana reads Prometheus and the operator's JSON API.
 - Auth, Ingress or write actions for the built-in UI/MCP.
 - Webhooks or admission control that block EOL images.
@@ -55,9 +55,11 @@ workloadLabels: [team]       # copied onto metrics as k8s_label_<name>
 ignoreProducts:              # hide accepted findings at export time (no rescan)
   - products: [perl]         # endoflife.date slugs; optional cycles, namespaces, selector (workload labels)
     namespaces: [test]
+ignoreVulnerabilities:       # same scoping; a rule needs ids and/or packages (both: that CVE in that package)
+  - ids: [CVE-2024-1234]
 ```
 
-Globs (`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces`): only `*` (anything, `/` included) and `?` (one character) are special; every string is a valid glob.
+Globs (`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces`, `ignoreVulnerabilities[].namespaces`): only `*` (anything, `/` included) and `?` (one character) are special; every string is a valid glob.
 
 Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`.
 

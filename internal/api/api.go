@@ -177,12 +177,26 @@ type FindingRow struct {
 	ScannedAt string   `json:"scanned_at"`
 }
 
-func (h *Handler) rows(q query, imgs []controller.Image) []FindingRow {
-	now := h.Now()
+// config is the current config snapshot: ignore rules. Without one nothing is ignored.
+func (h *Handler) config() controller.ConfigSnapshot {
 	var cfg controller.ConfigSnapshot
 	if h.Config != nil {
 		cfg, _ = h.Config.Get()
 	}
+	return cfg
+}
+
+// imageVulns is img's vulnerabilities for image-level counts over the workloads q matches: without
+// those that ignore rules hide for all of them.
+func imageVulns(cfg controller.ConfigSnapshot, q query, img controller.Image) []scanner.Vuln {
+	return cfg.ImageVulns(img.Vulns, slices.DeleteFunc(slices.Clone(img.Workloads), func(w controller.Workload) bool {
+		return !q.match(w)
+	}))
+}
+
+func (h *Handler) rows(q query, imgs []controller.Image) []FindingRow {
+	now := h.Now()
+	cfg := h.config()
 	var rows []FindingRow
 	for _, img := range imgs {
 		for _, w := range img.Workloads {
@@ -316,6 +330,7 @@ func workloadKey(namespace, kind, name string) string { return namespace + "/" +
 // workloadRows takes the snapshot the rows came from, so every row's workload is in it.
 func (h *Handler) workloadRows(q query, imgs []controller.Image, rows []FindingRow) []WorkloadRow {
 	byKey := map[string]*WorkloadRow{}
+	cfg := h.config()
 	for _, img := range imgs {
 		for _, w := range img.Workloads {
 			if !q.match(w) {
@@ -327,7 +342,7 @@ func (h *Handler) workloadRows(q query, imgs []controller.Image, rows []FindingR
 				wr = &WorkloadRow{Namespace: w.Namespace, Kind: w.Kind, Name: w.Name, VulnCounts: h.newVulnCounts()}
 				byKey[k] = wr
 			}
-			wr.add(scanner.CountVulns(img.Vulns)) // one workload can run several images
+			wr.add(scanner.CountVulns(cfg.VulnsFor(img.Vulns, w))) // one workload can run several images
 		}
 	}
 	for _, r := range rows {
@@ -423,7 +438,7 @@ type Status struct {
 	Vulnerabilities *VulnStatus `json:"vulnerabilities,omitempty"`
 }
 
-// VulnStatus is the vulnerability headline numbers. Counts are unique (CVE, package) rows per image
+// VulnStatus is the vulnerability headline numbers. Counts are unique (CVE, package, version) rows per image
 // digest, as in the xeol_vulnerabilities metric, so replicas don't multiply them.
 type VulnStatus struct {
 	BySeverity          map[string]int `json:"by_severity"`
