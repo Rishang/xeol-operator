@@ -71,16 +71,9 @@ The web page, MCP tools and JSON API are read-only and have no login: reach them
 
 ## How it works
 
-```
-Pods ──> images by digest ──> syft SBOM ──┬─> xeol ──> EOL findings ─────────────┬─> /metrics ──> Prometheus ──> alerts
-                                           │      ▲                                ├─> JSON API ──> Grafana dashboards
-                                           │      endoflife.date (rebuilt daily)   └─> web page, MCP tools
-                                           └─> trivy ──> vulnerabilities (optional) ──┘
-                                                  ▲
-                                                  trivy DB (downloaded daily)
-```
+![xeol-operator architecture: the operator reads its mounted config file and watches Pods, keeps running image digests in an inventory, scans each digest once with syft, then xeol (EOL, against a database built daily from endoflife.date) and optionally trivy (vulnerabilities, against trivy's database), and serves the results as Prometheus metrics, a JSON API for Grafana, a web page and MCP tools](.github/images/architecture.svg)
 
-Each image is scanned once, no matter how many Pods run it, and rescanned every `interval` (default 24h).
+Each image is scanned once, no matter how many Pods run it, and rescanned every `interval` (default 24h). The numbered steps are explained in [Architecture](https://rishang.github.io/xeol-operator/architecture/#how-it-works).
 
 ## Alerts
 
