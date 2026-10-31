@@ -54,7 +54,7 @@ tasks:
     cmds:
       - k3d cluster create {{.E2E_CLUSTER}} --no-lb --k3s-arg '--disable=traefik@server:0' --kubeconfig-update-default=false --wait
       - defer: k3d cluster delete {{.E2E_CLUSTER}}
-      - k3d kubeconfig get {{.E2E_CLUSTER}} > {{.KUBECONFIG}}
+      - mkdir -p {{.LOCALBIN}} && k3d kubeconfig get {{.E2E_CLUSTER}} > {{.KUBECONFIG}}
       - k3d image import {{.IMG}} -c {{.E2E_CLUSTER}}
       - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} create ns {{.NS}}
       - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} label ns {{.NS}} pod-security.kubernetes.io/enforce=restricted
