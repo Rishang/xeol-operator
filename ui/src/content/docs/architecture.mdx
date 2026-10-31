@@ -3,12 +3,15 @@ title: Architecture
 description: "How xeol-operator finds running images, scans them with syft, xeol and trivy, and serves the results."
 ---
 
+import ExpandableImage from '../../components/ExpandableImage.astro';
+import architecture from '../../assets/architecture.svg';
+
 This page explains how xeol-operator works inside. It finds the images your cluster runs, scans them, and serves the results.
 
 - To install and use the operator, see [Usage](/xeol-operator/usage/).
 - For chart values, see [Helm setup](/xeol-operator/helm/).
 
-![xeol-operator architecture: Kubernetes API on the left, the operator pod in the middle (config file watcher, Pod controller, Inventory, results.db, scan queue, syft feeding xeol and the optional trivy, the EOL and vulnerability DB managers, HTTP endpoints), external systems on the right, including endoflife.date and trivy's DB registries](../../assets/architecture.svg)
+<ExpandableImage src={architecture} alt="xeol-operator architecture: Kubernetes API on the left, the operator pod in the middle (config file watcher, Pod controller, Inventory, results.db, scan queue, syft feeding xeol and the optional trivy, the EOL and vulnerability DB managers, HTTP endpoints), external systems on the right, including endoflife.date and trivy's DB registries" />
 
 The numbers in the diagram match the steps under [How it works](#how-it-works).
 
