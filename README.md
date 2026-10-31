@@ -6,6 +6,7 @@ xeol-operator scans every image running in your Kubernetes cluster, finds runtim
 
 [![CI](https://github.com/Rishang/xeol-operator/actions/workflows/ci.yml/badge.svg)](https://github.com/Rishang/xeol-operator/actions/workflows/ci.yml)
 [![Docker Hub](https://img.shields.io/docker/v/rishang/xeol-operator?label=docker%20hub&sort=semver)](https://hub.docker.com/r/rishang/xeol-operator)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/xeol-operator)](https://artifacthub.io/packages/helm/xeol-operator/xeol-operator)
 
 ![Grafana dashboard: workloads running EOL software, by namespace and workload, with each finding's EOL date and days left](.github/images/grafana-dashboard.png)
 
@@ -159,7 +160,7 @@ Full documentation: **<https://rishang.github.io/xeol-operator/>**
 
 For AI tools, the site also serves [`llms.txt`](https://rishang.github.io/xeol-operator/llms.txt), [`llms-small.txt`](https://rishang.github.io/xeol-operator/llms-small.txt) and [`llms-full.txt`](https://rishang.github.io/xeol-operator/llms-full.txt).
 
-The chart is also listed on [Artifact Hub](https://artifacthub.io) once the repository is registered there; its source is in [`helm/xeol-operator`](helm/xeol-operator).
+The chart is also listed on [Artifact Hub](https://artifacthub.io/packages/helm/xeol-operator/xeol-operator); its source is in [`helm/xeol-operator`](helm/xeol-operator).
 
 ## Development
 
