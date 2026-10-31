@@ -1,0 +1,49 @@
+---
+title: xeol-operator
+description: "Find end-of-life software and known vulnerabilities in the images your Kubernetes cluster runs."
+template: splash
+hero:
+  tagline: Is end-of-life software still running in your cluster? xeol-operator scans every running image. It finds runtimes, databases, frameworks and distros past end of life, and optionally known CVEs. Then it shows you which workloads to fix first.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Quick start
+      link: /xeol-operator/quick-start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/Rishang/xeol-operator
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```bash
+helm repo add xeol-operator https://rishang.github.io/xeol-operator
+helm install xeol-operator xeol-operator/xeol-operator -n xeol-system --create-namespace
+```
+
+<CardGrid>
+	<Card title="Every running workload" icon="seti:docker">
+		You see what your Pods really run, by image digest, not what a manifest claims. Private registries work with the Pods' own pull secrets.
+	</Card>
+	<Card title="Dates, not labels" icon="information">
+		Every finding has its EOL date and the days left. So "due within 90 days" is just a query. The EOL data is rebuilt daily from endoflife.date.
+	</Card>
+	<Card title="Known vulnerabilities too" icon="warning">
+		Turn on `trivy.enabled` to check for CVEs too. Trivy reuses the SBOM (software bill of materials) from the EOL scan. There's no second image pull, and it takes about 0.2 s and 150 MB per image. Hide CVEs you've accepted by ID or package.
+	</Card>
+	<Card title="Fits your stack" icon="puzzle">
+		The chart ships Prometheus metrics, alert rules and Grafana dashboards. No Grafana? Use the built-in web page or the MCP tools.
+	</Card>
+</CardGrid>
+
+## Grafana
+
+![Grafana dashboard: workloads running EOL software, by namespace and workload, with each finding's EOL date and days left](../../assets/grafana-dashboard.png)
+
+## Built-in web page
+
+![Built-in web page: tiles, an EOL timeline, a sortable findings table, and workload and namespace summaries](../../assets/web-ui.png)
+
+![Trivy tab: workloads with CRITICAL and HIGH vulnerabilities, counts by severity, vulnerable packages grouped by severity, and the vulnerabilities table](../../assets/web-ui-trivy.png)

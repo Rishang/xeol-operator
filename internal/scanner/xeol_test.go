@@ -50,7 +50,7 @@ func TestParse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
-			b, err := os.ReadFile(filepath.Join("testdata", tt.file))
+			b, err := os.ReadFile(fixture(t, tt.file))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,9 +120,9 @@ func writeSBOM(content string) string {
 	return `for a; do case $a in syft-json=*) out=${a#syft-json=};; esac; done; echo '` + content + `' > "$out"`
 }
 
-func newXeol(t *testing.T, bin string) *Xeol {
-	return &Xeol{Bin: bin, Syft: fake(t, "syft", t.TempDir(), writeSBOM("{}")), DBDir: "/db", StateDir: t.TempDir(), WorkDir: t.TempDir(),
-		Timeout: time.Minute, MemoryLimit: "1GiB", MaxProcs: 2, OOMBackoff: 24 * time.Hour}
+func newXeol(t *testing.T, bin string) *Runner {
+	return &Runner{XeolBin: bin, Syft: fake(t, "syft", t.TempDir(), writeSBOM("{}")), DBDir: "/db", StateDir: t.TempDir(), WorkDir: t.TempDir(),
+		Timeout: time.Minute, MemoryLimit: "1GiB", MaxProcs: 2, OOMBackoff: 24 * time.Hour, EOL: true}
 }
 
 // read returns the file's content, or "" if the fake binary never wrote it.
@@ -137,19 +137,30 @@ func read(t *testing.T, p string) string {
 
 const ref = "docker.io/library/python@sha256:abc"
 
-func catFixture() string {
-	f, _ := filepath.Abs("testdata/py38.json")
-	return "cat " + f
+// fixture returns the absolute path of testdata/<name>, skipping the test when it is missing:
+// fixtures are real syft, xeol and trivy output kept locally only (testdata/ is gitignored).
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("testdata", name))
+	if err == nil {
+		_, err = os.Stat(p)
+	}
+	if err != nil {
+		t.Skipf("fixture testdata/%s not available: %v", name, err)
+	}
+	return p
 }
+
+func catFixture(t *testing.T) string { return "cat " + fixture(t, "py38.json") }
 
 func TestScanArgsAndEnv(t *testing.T) {
 	logs := t.TempDir()
 	// xeol only gets the SBOM that syft wrote.
-	x := newXeol(t, fake(t, "xeol", logs, `grep -q sbom-from-syft "${1#sbom:}" || exit 3; `+catFixture()))
+	x := newXeol(t, fake(t, "xeol", logs, `grep -q sbom-from-syft "${1#sbom:}" || exit 3; `+catFixture(t)))
 	x.Syft = fake(t, "syft", logs, writeSBOM("sbom-from-syft"))
 	got, err := x.Scan(context.Background(), Target{Ref: ref, Platform: "linux/arm64"})
-	if err != nil || len(got) != 3 {
-		t.Fatalf("got %d findings, err %v", len(got), err)
+	if err != nil || len(got.Findings) != 3 || got.Vulns != nil {
+		t.Fatalf("got %+v, err %v", got, err)
 	}
 	syftArgs := read(t, logs+"/syft-args")
 	for _, want := range []string{"scan registry:" + ref, "-o syft-json=", "--select-catalogers -dotnet-portable-executable-cataloger,",
@@ -199,7 +210,7 @@ func TestScanErrors(t *testing.T) {
 	}
 	// A failed pull in syft stops the scan before xeol runs.
 	logs := t.TempDir()
-	x := newXeol(t, fake(t, "xeol", logs, catFixture()))
+	x := newXeol(t, fake(t, "xeol", logs, catFixture(t)))
 	x.Syft = fake(t, "syft", logs, `echo "GET https://r/v2/x: UNAUTHORIZED" >&2; exit 1`)
 	_, err := x.Scan(context.Background(), Target{Ref: ref})
 	var se *ScanError
@@ -213,7 +224,7 @@ func TestScanErrors(t *testing.T) {
 
 func TestScanOOMBackoff(t *testing.T) {
 	logs := t.TempDir()
-	x := newXeol(t, fake(t, "xeol", logs, catFixture()))
+	x := newXeol(t, fake(t, "xeol", logs, catFixture(t)))
 	marker := filepath.Join(x.StateDir, "inflight", "sha256_abc")
 	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
 		t.Fatal(err)
@@ -246,7 +257,7 @@ func TestScanOOMSuspectRescannedAlone(t *testing.T) {
 	x := newXeol(t, "")
 	marker := filepath.Join(x.StateDir, "inflight", "sha256_abc")
 	// The rescan must run marked solo, so a second crash identifies this image.
-	x.Bin = fake(t, "xeol", logs, `grep -q `+soloMark+` `+marker+` || exit 4; `+catFixture())
+	x.XeolBin = fake(t, "xeol", logs, `grep -q `+soloMark+` `+marker+` || exit 4; `+catFixture(t))
 	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,6 @@ context: |
 rules:
   proposal:
     - Include a "Non-goals" section
-    - Call out any new CRD field, metric, or label and why it's needed
+    - Call out any new config file field, metric, or label and why it's needed
   tasks:
     - Each task ends with a runnable check (go test, task target, or kubectl step)

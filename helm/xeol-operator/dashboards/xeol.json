@@ -24,6 +24,18 @@
       "1h"
     ]
   },
+  "links": [
+    {
+      "type": "dashboards",
+      "title": "xeol dashboards",
+      "tags": [
+        "xeol"
+      ],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
   "templating": {
     "list": [
       {

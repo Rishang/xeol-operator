@@ -22,7 +22,7 @@ Always pass `--context k3d-k3s-default` / `--kube-context k3d-k3s-default`; the 
 | Deployment/python312 | python:3.12-slim | 0 | 2 |
 
 `monitoring` adds EOL-soon findings only (grafana 3, kube-state-metrics 1, node-exporter 1).
-`kubectl --context k3d-k3s-default get xeolscanner default` showed IMAGES 9, EOL 3, Ready True.
+`/api/v1/status` (port-forward 8080) showed 9 images scanned, 3 findings already EOL. (Before 2026-10-31 this was `kubectl get xeolscanner default`; the CRD is gone.)
 ("soon" = within 10 years here, from `/api/v1/workloads?within_days=3650`.)
 
 ## Grafana

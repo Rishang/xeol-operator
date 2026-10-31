@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -56,13 +57,16 @@ type Image struct {
 	Scanned     time.Time
 	Next        time.Time
 	Findings    []scanner.Finding
-	ErrReason   string
+	// Vulns is nil until the digest is scanned with trivy.
+	Vulns     []scanner.Vuln
+	ErrReason string
 }
 
 type entry struct {
 	pods          map[types.NamespacedName]PodImage
 	scanned, next time.Time
 	findings      []scanner.Finding
+	vulns         []scanner.Vuln
 	errReason     string
 }
 
@@ -134,14 +138,6 @@ func (inv *Inventory) DeletePod(pod types.NamespacedName) (removed []string) {
 	return removed
 }
 
-// Clear drops everything, e.g. when the XeolScanner is deleted.
-func (inv *Inventory) Clear() {
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	inv.images = map[string]*entry{}
-	inv.pods = map[types.NamespacedName][]string{}
-}
-
 // Get returns one digest's snapshot.
 func (inv *Inventory) Get(digest string) (Image, bool) {
 	inv.mu.RLock()
@@ -165,8 +161,27 @@ func (inv *Inventory) Images() []Image {
 	return out
 }
 
+// Match returns the running images whose ref (as written in the Pod spec) or repository matches any
+// glob, with excludeImages' glob syntax; every image when globs is empty. The globs are compiled per
+// call, not cached: they come from rescan requests, not the config file.
+func (inv *Inventory) Match(globs []string) []Image {
+	res := make([]*regexp.Regexp, 0, len(globs))
+	for _, g := range globs {
+		res = append(res, globRegexp(g))
+	}
+	var out []Image
+	for _, img := range inv.Images() {
+		if len(res) == 0 || slices.ContainsFunc(res, func(re *regexp.Regexp) bool {
+			return re.MatchString(img.Ref) || re.MatchString(img.Repo)
+		}) {
+			out = append(out, img)
+		}
+	}
+	return out
+}
+
 func snapshot(digest string, e *entry) Image {
-	img := Image{Digest: digest, Scanned: e.scanned, Next: e.next, Findings: e.findings, ErrReason: e.errReason}
+	img := Image{Digest: digest, Scanned: e.scanned, Next: e.next, Findings: e.findings, Vulns: e.vulns, ErrReason: e.errReason}
 	seenW := map[string]bool{}
 	seenS := map[types.NamespacedName]bool{}
 	var first string
@@ -195,8 +210,9 @@ func snapshot(digest string, e *entry) Image {
 }
 
 // SetResult stores a scan result and when to scan next. A failure without findings (a failed scan)
-// keeps the previous ones; a restored record brings its own.
-func (inv *Inventory) SetResult(digest string, findings []scanner.Finding, errReason string, at, next time.Time) {
+// keeps the previous ones; a restored record brings its own. Nil vulns (trivy off, or its step
+// failed) keep the previous ones too.
+func (inv *Inventory) SetResult(digest string, r scanner.Result, errReason string, at, next time.Time) {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	e, ok := inv.images[digest]
@@ -204,8 +220,11 @@ func (inv *Inventory) SetResult(digest string, findings []scanner.Finding, errRe
 		return // stopped running while being scanned
 	}
 	e.scanned, e.next, e.errReason = at, next, errReason
-	if errReason == "" || findings != nil {
-		e.findings = findings
+	if errReason == "" || r.Findings != nil {
+		e.findings = r.Findings
+	}
+	if r.Vulns != nil {
+		e.vulns = r.Vulns
 	}
 }
 
@@ -221,4 +240,16 @@ func (inv *Inventory) Due(now time.Time) []string {
 	}
 	slices.Sort(due)
 	return due
+}
+
+// Rescan queues every running image matching globs (all of them with none) for a scan now and returns
+// their refs. The scan queue dedupes, so a digest already queued or being scanned is not scanned twice.
+func (inv *Inventory) Rescan(globs []string, enqueue func(digest string)) []string {
+	imgs := inv.Match(globs)
+	refs := make([]string, 0, len(imgs))
+	for _, img := range imgs {
+		enqueue(img.Digest)
+		refs = append(refs, img.Ref)
+	}
+	return refs
 }

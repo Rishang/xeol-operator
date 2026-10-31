@@ -1,0 +1,171 @@
+---
+title: Air-gapped installation
+description: "Run xeol-operator without internet access: mount the EOL and trivy databases from a volume."
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+An air-gapped cluster has no internet access. You can still run the operator there. You build the EOL database on a connected machine and hand it to the operator.
+
+How it works:
+
+- In online mode, the operator builds its EOL database from [endoflife.date](https://endoflife.date) at startup and daily. That needs egress (outbound internet access).
+- Without egress, build the database on a connected machine instead.
+- Then give it to the operator with `db.source=mounted`.
+- The operator then never touches the network, except to pull the images it scans from your internal registry.
+
+## 1. Build the database (connected machine)
+
+The operator image can build the database for you:
+
+```bash
+docker run --rm -v "$PWD/db:/out" --entrypoint /manager rishang/xeol-operator:<version> build-db --out /out
+# -> db/1/xeol.db, db/1/metadata.json
+```
+
+You can also build it from a saved endoflife.date dump, for example one fetched through a proxy:
+
+```bash
+curl -sSfL https://endoflife.date/api/v1/products/full -o products-full.json
+docker run --rm -v "$PWD:/work" --entrypoint /manager rishang/xeol-operator:<version> \
+  build-db --from /work/products-full.json --out /work/db
+```
+
+To check the result, use any xeol v0.10.8 binary. `XEOL_DB_CACHE_DIR=./db xeol db status` should print `Status: valid`.
+
+Rebuild and redistribute the database regularly. Three signals tell you when it's due:
+
+- the `xeol_db_built_timestamp_seconds` metric
+- `db_age_seconds` in `/api/v1/status`
+- the `XeolDatabaseStale` alert (30 days by default)
+
+## 2. Get it into the cluster
+
+Pick one of the three options below.
+
+### a. Database image (recommended)
+
+Air-gapped clusters already mirror images. So ship the database as an image too:
+
+```dockerfile
+FROM busybox:1.37
+COPY db /db
+```
+
+```bash
+docker build -t registry.internal/xeol-db:$(date +%F) .
+docker push registry.internal/xeol-db:$(date +%F)
+```
+
+```yaml
+# values.yaml
+db:
+  source: mounted
+  mounted:
+    initContainer:
+      image: registry.internal/xeol-db:2026-10-26
+```
+
+At startup, an init container copies `/db` into an `emptyDir` (a scratch volume that lives as long as the pod).
+
+- The image needs `sh` and `cp`.
+- For a different layout, override `db.mounted.initContainer.command`.
+- To update, push a new tag, then run `helm upgrade --set db.mounted.initContainer.image=...`.
+
+### b. Volume (PVC, NFS, hostPath)
+
+Copy `db/` onto any volume and mount it read-only:
+
+```yaml
+db:
+  source: mounted
+  mounted:
+    path: /xeol-db
+    volume:
+      persistentVolumeClaim:
+        claimName: xeol-db
+```
+
+The volume must contain `1/xeol.db` and `1/metadata.json` at its root:
+
+<FileTree>
+- /xeol-db (the mounted volume)
+  - 1/
+    - xeol.db
+    - metadata.json
+</FileTree>
+
+To update, replace the files. The next scan uses them. If you want every image rescanned right away, restart the operator.
+
+### c. Internal endoflife.date mirror (online mode, no egress to the internet)
+
+Use this if you can host one file internally. You keep online mode and point the operator at your copy:
+
+```bash
+curl -sSfL https://endoflife.date/api/v1/products/full -o products-full.json
+# upload to e.g. https://files.internal/eol/products-full.json and refresh it daily
+```
+
+```yaml
+db:
+  source: online
+  url: https://files.internal/eol/products-full.json
+```
+
+## Vulnerability database (`trivy.enabled`)
+
+With `trivy.enabled` and `db.source: mounted`, the operator also reads trivy's database from a volume. It does not download it.
+
+First, download the database on a connected machine with [trivy](https://trivy.dev). Use a trivy with the same major DB schema as the bundled trivy (`trivy-db:2`):
+
+```bash
+trivy image --download-db-only --cache-dir trivy-db
+# -> trivy-db/db/trivy.db, trivy-db/db/metadata.json   (main DB only; the Java DB isn't needed)
+```
+
+Then copy `trivy-db/` onto a volume and mount it read-only:
+
+```yaml
+db:
+  source: mounted
+trivy:
+  enabled: true
+  mounted:
+    path: /trivy-db
+    volume:
+      persistentVolumeClaim:
+        claimName: trivy-db
+```
+
+The volume must contain `db/trivy.db` and `db/metadata.json` at its root:
+
+<FileTree>
+- /trivy-db (the mounted volume)
+  - db/
+    - trivy.db
+    - metadata.json
+</FileTree>
+
+Refresh it at least weekly. `XeolVulnDatabaseStale` fires after `trivy.dbStaleDays` (7).
+
+**Alternative: an internal OCI registry.** If your cluster can reach one, you can keep `db.source: online`:
+
+1. Mirror `mirror.gcr.io/aquasec/trivy-db:2` to your registry (e.g. with `oras cp`).
+2. Set `trivy.dbRepository: [registry.internal/aquasec/trivy-db:2]`.
+
+Online mode then needs no internet egress for trivy.
+
+## Registry access
+
+Nothing extra is needed for pulling images. Scans pull images by digest (the exact image hash) from the registries your Pods use. They use the Pods' `imagePullSecrets`, and those of their ServiceAccounts. In an air-gapped cluster those are your internal registries.
+
+Images loaded straight onto nodes (`k3d image import`, `kind load`) have no registry digest. They are skipped.
+
+## What never leaves the cluster
+
+The operator never contacts `data.xeol.io` or `xeol.io`:
+
+- xeol runs with auto-update and the update check off.
+- xeol never runs with `--api-key`.
+
+trivy scans run with `--skip-db-update --skip-java-db-update --offline-scan --skip-version-check --disable-telemetry`. Only the daily DB download (online mode) reaches the trivy DB registry.

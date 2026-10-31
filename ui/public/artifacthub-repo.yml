@@ -1,0 +1,11 @@
+# Artifact Hub repository metadata, served at https://rishang.github.io/xeol-operator/artifacthub-repo.yml
+# (the Helm repository's URL). See https://artifacthub.io/docs/topics/repositories/helm-charts/
+#
+# After adding the repository on artifacthub.io, set repositoryID to the ID it shows
+# (Control Panel -> repository -> "Get repository ID"), and list the owners who may claim it.
+# Both stay commented until then: Artifact Hub ignores the file without them.
+#
+# repositoryID: 00000000-0000-0000-0000-000000000000
+# owners:
+#   - name: Rishang
+#     email: you@example.com

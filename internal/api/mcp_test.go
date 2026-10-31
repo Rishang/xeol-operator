@@ -133,7 +133,7 @@ func TestUIEscapes(t *testing.T) {
 	hd.UI = true
 	hd.Inventory.SetPod(types.NamespacedName{Namespace: "x", Name: "p"}, []controller.PodImage{{Digest: "sha256:x",
 		Ref: `<script>alert(1)</script>`, Workload: controller.Workload{Namespace: "x", Kind: "Pod", Name: "p"}}})
-	hd.Inventory.SetResult("sha256:x", []scanner.Finding{{Product: "P", EOL: now.Add(-time.Hour), URL: "javascript:alert(1)"}}, "", now, now)
+	hd.Inventory.SetResult("sha256:x", scanner.Result{Findings: []scanner.Finding{{Product: "P", EOL: now.Add(-time.Hour), URL: "javascript:alert(1)"}}}, "", now, now)
 	rec := httptest.NewRecorder()
 	serve(hd).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if b := rec.Body.String(); strings.Contains(b, "<script>alert") || strings.Contains(b, `href="javascript:`) {

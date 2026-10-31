@@ -8,13 +8,4 @@ layout:
 - go.kubebuilder.io/v4
 projectName: xeol-operator
 repo: github.com/Rishang/xeol-operator
-resources:
-- api:
-    crdVersion: v1
-  controller: true
-  domain: io
-  group: xeol
-  kind: XeolScanner
-  path: github.com/Rishang/xeol-operator/api/v1alpha1
-  version: v1alpha1
 version: "3"

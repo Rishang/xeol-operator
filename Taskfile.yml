@@ -20,22 +20,16 @@ vars:
     sh: go list -m k8s.io/api | sed -E 's/.* v?[0-9]+\.([0-9]+).*/1.\1/'
 
 tasks:
-  generate:
-    desc: Generate DeepCopy code
-    deps: [tools]
-    cmds:
-      - '{{.CONTROLLER_GEN}} object:headerFile="hack/boilerplate.go.txt",year={{now | date "2006"}} paths="{./api/...,./internal/...,./cmd/...}"'
-
   manifests:
-    desc: Generate CRD and RBAC manifests
+    desc: Generate RBAC manifests (config/rbac/role.yaml) from the +kubebuilder:rbac markers
     deps: [tools]
     cmds:
-      - '{{.CONTROLLER_GEN}} rbac:roleName=manager-role crd paths="{./api/...,./internal/...,./cmd/...}" output:crd:artifacts:config=config/crd/bases'
+      - '{{.CONTROLLER_GEN}} rbac:roleName=manager-role paths="{./internal/...,./cmd/...}"'
 
   check:
     internal: true
     run: once
-    deps: [manifests, generate]
+    deps: [manifests]
     cmds: [go fmt ./..., go vet ./...]
 
   test:
@@ -43,6 +37,12 @@ tasks:
     deps: [check]
     cmds:
       - KUBEBUILDER_ASSETS="$({{.ENVTEST}} use {{.ENVTEST_K8S_VERSION}} --bin-dir {{.LOCALBIN}} -p path)" go test ./... -coverprofile cover.out
+
+  test-trivy:
+    desc: 'trivy parser test against a real trivy DB: task test-trivy TRIVY_DB_DIR=<dir holding db/trivy.db>'
+    requires: {vars: [TRIVY_DB_DIR]}
+    cmds:
+      - TRIVY_DB_DIR={{.TRIVY_DB_DIR}} go test -tags trivy ./internal/scanner/
 
   test-e2e:
     desc: 'Smoke test in a throwaway k3d cluster: the Helm chart installs under restricted PSA and the pod turns Ready (EOL DB built)'
@@ -94,7 +94,6 @@ tasks:
   run:
     desc: Run the operator locally against the k3d cluster
     cmds:
-      - kubectl --context {{.KUBE_CONTEXT}} apply --server-side -f config/crd/bases
       # minified kubeconfig holding only the test context, so the operator can't reach anything else
       - mkdir -p {{.LOCALBIN}} && kubectl config view --minify --flatten --context {{.KUBE_CONTEXT}} > bin/test.kubeconfig
       - go run ./cmd --kubeconfig bin/test.kubeconfig --metrics-bind-address :8080 --metrics-secure=false {{.CLI_ARGS}}
@@ -121,33 +120,31 @@ tasks:
     deps: [docker-build]
     cmds:
       - k3d image import {{.IMG}} -c {{.K3D_CLUSTER}}
-      # helm installs crds/ only once and never upgrades them
-      - kubectl --context {{.KUBE_CONTEXT}} apply --server-side -f {{.CHART}}/crds
+      # The tag stays the same, so the image ID goes into a pod annotation: helm rolls the pod out once
+      # when the image or the values change, and not at all when neither did.
       - >-
         helm upgrade --install xeol-operator {{.CHART}} --kube-context {{.KUBE_CONTEXT}}
         -n {{.NS}} --create-namespace
         --set image.repository={{splitList ":" .IMG | first}} --set image.tag={{splitList ":" .IMG | last}}
-        --set image.pullPolicy=Never {{.CLI_ARGS}}
-      # the tag stays the same, so helm alone never replaces the pod
-      - kubectl --context {{.KUBE_CONTEXT}} -n {{.NS}} rollout restart deploy/xeol-operator
+        --set image.pullPolicy=Never
+        --force-conflicts
+        --set-string podAnnotations.image-id=$(docker image inspect -f '{{"{{.Id}}"}}' {{.IMG}} | cut -d: -f2 | cut -c1-12)
+        {{.CLI_ARGS}}
       - kubectl --context {{.KUBE_CONTEXT}} -n {{.NS}} rollout status deploy/xeol-operator --timeout=300s
 
   build-db:
     desc: Build xeol's EOL database from endoflife.date into ./db
     cmds: ['go run ./cmd build-db --out {{.OUT | default "db"}}']
 
-  chart-crds:
-    desc: Copy generated CRDs into the Helm chart
-    deps: [manifests]
-    cmds:
-      - mkdir -p {{.CHART}}/crds
-      - cp config/crd/bases/*.yaml {{.CHART}}/crds/
+  docs-dev:
+    desc: Serve the docs site (ui/) with live reload at http://localhost:4321/xeol-operator/
+    dir: ui
+    cmds: [pnpm install --frozen-lockfile, pnpm exec astro dev]
 
-  chart-check:
-    desc: Fail if the chart CRDs drift from the generated ones
-    deps: [manifests]
-    cmds:
-      - diff -r config/crd/bases {{.CHART}}/crds
+  docs-build:
+    desc: Build the docs site into ui/dist; broken internal links fail the build
+    dir: ui
+    cmds: [pnpm install --frozen-lockfile, pnpm exec astro build]
 
   chart-test:
     desc: Lint the chart and render it with each feature toggle
@@ -158,3 +155,9 @@ tasks:
       - helm template t {{.CHART}} --set db.source=mounted,db.mounted.volume.persistentVolumeClaim.claimName=xeol-db > /dev/null
       - helm template t {{.CHART}} --set db.source=mounted,db.mounted.initContainer.image=registry.local/xeol-db:latest > /dev/null
       - helm template t {{.CHART}} --set-json 'scanner.ignoreProducts=[{"products":["perl"],"namespaces":["test"]}]' | grep -q 'ignoreProducts'
+      - helm template t {{.CHART}} --set-json 'scanner.ignoreVulnerabilities=[{"ids":["CVE-2024-1234"]}]' | grep -q 'ignoreVulnerabilities'
+      - helm template t {{.CHART}} --set mcp.enabled=true,mcp.allowRescan=true | grep -q -- '--mcp-allow-rescan'
+      - test "$(helm template t {{.CHART}} --set mcp.enabled=true | grep -c -- '--mcp-allow-rescan')" = 0
+      # null (default) leaves workloadKinds out; [] must reach the file, where it means every kind
+      - test "$(helm template t {{.CHART}} -s templates/configmap.yaml | grep -c workloadKinds)" = 0
+      - helm template t {{.CHART}} -s templates/configmap.yaml --set-json 'scanner.workloadKinds=[]' | grep -A1 workloadKinds | grep -q '\[\]'

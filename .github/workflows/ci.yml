@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**']
+    paths-ignore: ['ui/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**', '.github/workflows/pages.yml']
   pull_request:
-    paths-ignore: ['docs/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**']
+    paths-ignore: ['ui/**', '**.md', 'openspec/**', '.claude/**', '.serena/**', '.github/images/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 concurrency:
@@ -32,8 +32,8 @@ jobs:
         with:
           path: bin
           key: bin-${{ hashFiles('Taskfile.yml', 'go.sum') }}
-      - run: task lint test chart-check chart-test
-      - name: Generated code, CRDs and go.mod are committed
+      - run: task lint test chart-test
+      - name: Generated RBAC and go.mod are committed
         run: go mod tidy && git diff --exit-code
 
   # k3d + image build is the slow part: only on main and on demand, not on every PR.

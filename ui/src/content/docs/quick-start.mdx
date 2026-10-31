@@ -1,0 +1,72 @@
+---
+title: Quick start
+description: "Install xeol-operator with Helm and see your first results."
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Four steps get you from nothing to your first scan results.
+
+<Steps>
+
+1. Add the chart repository:
+
+   ```bash
+   helm repo add xeol-operator https://rishang.github.io/xeol-operator
+   helm repo update
+   ```
+
+2. Install it. Pick the tab that fits your cluster: with Grafana, or with the built-in web page.
+
+   <Tabs syncKey="install">
+   <TabItem label="With Prometheus and Grafana">
+
+   ```bash
+   helm install xeol-operator xeol-operator/xeol-operator -n xeol-system --create-namespace \
+     --set serviceMonitor.enabled=true \
+     --set prometheusRule.enabled=true \
+     --set grafanaDatasource.enabled=true
+   ```
+
+   You need kube-prometheus-stack and Grafana's [Infinity](https://grafana.com/grafana/plugins/yesoreyeram-infinity-datasource/) plugin.
+
+   </TabItem>
+   <TabItem label="Without Grafana">
+
+   ```bash
+   helm install xeol-operator xeol-operator/xeol-operator -n xeol-system --create-namespace \
+     --set ui.enabled=true --set mcp.enabled=true
+   kubectl -n xeol-system port-forward deploy/xeol-operator 8080
+   # open http://localhost:8080/
+   ```
+
+   </TabItem>
+   </Tabs>
+
+3. Check that it's scanning:
+
+   ```bash
+   kubectl -n xeol-system get pods        # READY 1/1 once the EOL database is built
+   kubectl -n xeol-system port-forward svc/xeol-operator-metrics 8080 &
+   curl -s localhost:8080/api/v1/status   # images_scanned grows towards images_tracked
+   ```
+
+4. Optional: add vulnerability scanning with trivy.
+
+   ```bash
+   helm upgrade xeol-operator xeol-operator/xeol-operator -n xeol-system --reuse-values --set trivy.enabled=true
+   ```
+
+   The pod first downloads trivy's database (~1.6 GB). It turns Ready again once that's done.
+
+</Steps>
+
+<Aside type="caution" title="No authentication">
+The web page, MCP tools and JSON API are read-only, and they have no login. Reach them with `port-forward`. Don't expose them through a public Ingress.
+</Aside>
+
+## Next steps
+
+- [Read the results](/xeol-operator/usage/#3-read-the-results).
+- [Choose what gets scanned](/xeol-operator/usage/#4-choose-what-gets-scanned).
+- See every chart value in [Helm setup](/xeol-operator/helm/).

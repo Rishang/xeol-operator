@@ -18,22 +18,24 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	xeolv1alpha1 "github.com/Rishang/xeol-operator/api/v1alpha1"
+	"github.com/Rishang/xeol-operator/internal/config"
 	"github.com/Rishang/xeol-operator/internal/controller"
 	"github.com/Rishang/xeol-operator/internal/scanner"
 )
 
 var now = time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
 
-func setup(t *testing.T, leader bool, ignores ...xeolv1alpha1.IgnoreRule) http.Handler {
+func setup(t *testing.T, leader bool, ignores ...config.IgnoreRule) http.Handler {
 	t.Helper()
 	return serve(newHandler(t, leader, ignores...))
 }
@@ -46,7 +48,7 @@ func serve(h *Handler) http.Handler {
 	return mux
 }
 
-func newHandler(t *testing.T, leader bool, ignores ...xeolv1alpha1.IgnoreRule) *Handler {
+func newHandler(t *testing.T, leader bool, ignores ...config.IgnoreRule) *Handler {
 	t.Helper()
 	inv := controller.NewInventory()
 	wl := func(ns, kind, name string) controller.Workload {
@@ -58,20 +60,20 @@ func newHandler(t *testing.T, leader bool, ignores ...xeolv1alpha1.IgnoreRule) *
 	inv.SetPod(types.NamespacedName{Namespace: "web", Name: "c"}, []controller.PodImage{{Digest: "sha256:node", Ref: "node:22-alpine", Workload: wl("web", "Deployment", "node22")}})
 	inv.SetPod(types.NamespacedName{Namespace: "web", Name: "d"}, []controller.PodImage{{Digest: "sha256:new", Ref: "redis:7", Workload: wl("web", "Deployment", "cache")}})
 	day := 24 * time.Hour
-	inv.SetResult("sha256:py", []scanner.Finding{
+	inv.SetResult("sha256:py", scanner.Result{Findings: []scanner.Finding{
 		{Product: "Python", Cycle: "3.8", EOL: now.Add(-750 * day), Package: "python", Version: "3.8.20", URL: "https://endoflife.date/python"},
 		{Product: "Debian", Cycle: "12", EOL: now.Add(600 * day)},
-	}, "", now, now.Add(day))
-	inv.SetResult("sha256:node", []scanner.Finding{{Product: "Node.js", Cycle: "22", EOL: now.Add(30 * day)},
-		{Product: "Gorilla", Cycle: "1", EOL: time.Unix(0, 0)}}, "", now, now.Add(day)) // EOL without a date
-	inv.SetResult("sha256:new", nil, scanner.ReasonOOM, now, now.Add(day))
+	}}, "", now, now.Add(day))
+	inv.SetResult("sha256:node", scanner.Result{Findings: []scanner.Finding{{Product: "Node.js", Cycle: "22", EOL: now.Add(30 * day)},
+		{Product: "Gorilla", Cycle: "1", EOL: time.Unix(0, 0)}}}, "", now, now.Add(day)) // EOL without a date
+	inv.SetResult("sha256:new", scanner.Result{}, scanner.ReasonOOM, now, now.Add(day))
 	cfg := &controller.Config{}
-	snap, err := controller.SnapshotFrom(&xeolv1alpha1.XeolScannerSpec{IgnoreProducts: ignores})
+	snap, err := controller.SnapshotFrom(&config.Config{IgnoreProducts: ignores})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Set(snap)
-	h := &Handler{Inventory: inv, Config: cfg, Now: func() time.Time { return now }, Leader: func() bool { return leader },
+	h := &Handler{EOL: true, Inventory: inv, Config: cfg, Now: func() time.Time { return now }, Leader: func() bool { return leader },
 		DBBuilt: func() (time.Time, error) { return now.Add(-2 * time.Hour), nil }}
 	return h
 }
@@ -121,12 +123,12 @@ func TestFindings(t *testing.T) {
 func TestIgnoreProducts(t *testing.T) {
 	var rows []FindingRow
 	// Global rule, matched by the lowercased name when there is no URL ("Gorilla").
-	get(t, setup(t, true, xeolv1alpha1.IgnoreRule{Products: []string{"GORILLA"}}), "/api/v1/findings", &rows)
+	get(t, setup(t, true, config.IgnoreRule{Products: []string{"GORILLA"}}), "/api/v1/findings", &rows)
 	if len(rows) != 3 || rows[0].Product != "Python" {
 		t.Fatalf("global: rows = %+v", rows)
 	}
 	// Shared python digest: hidden for the DaemonSet (team=platform) only.
-	h := setup(t, true, xeolv1alpha1.IgnoreRule{Products: []string{"python"},
+	h := setup(t, true, config.IgnoreRule{Products: []string{"python"},
 		Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "platform"}}})
 	get(t, h, "/api/v1/findings", &rows)
 	if len(rows) != 3 || rows[1].Product != "Python" || rows[1].Name != "python38" {
@@ -140,7 +142,7 @@ func TestIgnoreProducts(t *testing.T) {
 		}
 	}
 	// Namespace scope: both python workloads are in test.
-	get(t, setup(t, true, xeolv1alpha1.IgnoreRule{Products: []string{"python"}, Namespaces: []string{"te*"}}), "/api/v1/findings", &rows)
+	get(t, setup(t, true, config.IgnoreRule{Products: []string{"python"}, Namespaces: []string{"te*"}}), "/api/v1/findings", &rows)
 	if len(rows) != 2 || rows[0].Product != "Gorilla" || rows[1].Product != "Node.js" {
 		t.Fatalf("namespaces: rows = %+v", rows)
 	}
@@ -161,13 +163,19 @@ func TestWorkloadsAndNamespaces(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	h := setup(t, true)
+	hd := newHandler(t, true)
+	h := serve(hd)
 	var s Status
 	get(t, h, "/api/v1/status", &s)
 	if s.ImagesTracked != 3 || s.ImagesScanned != 3 || s.Workloads != 4 || s.WorkloadsEOL != 3 || s.WorkloadsEOLSoon != 0 ||
 		s.NextEOLDays == nil || *s.NextEOLDays != 30 || s.DBAgeSeconds == nil || *s.DBAgeSeconds != 7200 ||
-		s.FailedScans != 1 || s.FailedScansByCause["oom"] != 1 {
+		s.FailedScans != 1 || s.FailedScansByCause["oom"] != 1 || s.LastSweep != now.UTC().Format(time.RFC3339) || s.ConfigError != "" {
 		t.Fatalf("status = %+v", s)
+	}
+	hd.Config.SetError(errors.New("parsing config: unknown field \"intervall\""))
+	get(t, h, "/api/v1/status", &s)
+	if !strings.Contains(s.ConfigError, "intervall") {
+		t.Fatalf("config_error = %q", s.ConfigError)
 	}
 }
 

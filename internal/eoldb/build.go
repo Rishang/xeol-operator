@@ -32,6 +32,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // pure Go: keeps the image cgo-free
+
+	"github.com/Rishang/xeol-operator/internal/dbloop"
 )
 
 // DefaultURL is endoflife.date's full product dump: every product, release and identifier.
@@ -138,7 +140,7 @@ func Build(data []byte, dir string, now time.Time) error {
 	if err := os.WriteFile(filepath.Join(tmp, "metadata.json"), meta, 0o644); err != nil {
 		return err
 	}
-	return swap(tmp, filepath.Join(dir, schemaDir))
+	return dbloop.Swap(tmp, filepath.Join(dir, schemaDir))
 }
 
 func writeDB(path string, src *productsFull, now time.Time) error {
@@ -200,21 +202,6 @@ func writeDB(path string, src *productsFull, now time.Time) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// swap replaces dst with src. ponytail: a scan starting in the instant between the two renames
-// sees no DB and fails once; it is retried on the next pass.
-func swap(src, dst string) error {
-	old := dst + ".old"
-	_ = os.RemoveAll(old)
-	if err := os.Rename(dst, old); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Rename(src, dst); err != nil {
-		_ = os.Rename(old, dst)
-		return err
-	}
-	return os.RemoveAll(old)
 }
 
 // Built returns the build time recorded in <dir>/1/metadata.json.

@@ -13,6 +13,7 @@ spec:
   groups:
     - name: xeol-operator
       rules:
+        {{- if .Values.eol.enabled }}
         # Per image and product; the dashboard joins images to workloads on `digest`.
         - alert: XeolEOLSoftwareRunning
           expr: xeol_eol_date_seconds < time()
@@ -45,6 +46,17 @@ spec:
             severity: warning
           annotations:
             summary: xeol-operator has no EOL database, so nothing is being scanned
+        {{- end }}
+        {{- if .Values.trivy.enabled }}
+        - alert: XeolVulnDatabaseStale
+          expr: time() - xeol_vuln_db_updated_timestamp_seconds > {{ .Values.trivy.dbStaleDays }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: xeol-operator vulnerability database is older than {{ .Values.trivy.dbStaleDays }} days
+            description: "The trivy database was published {{`{{ $value | humanizeDuration }}`}} ago. Online mode: check egress to the trivy DB registry (trivy.dbRepository). Mounted mode: refresh the volume."
+        {{- end }}
         - alert: XeolScanErrors
           expr: sum by (reason) (increase(xeol_scan_errors_total[1h])) > 5
           for: 15m

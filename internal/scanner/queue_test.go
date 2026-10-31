@@ -32,6 +32,7 @@ type fakeStore struct {
 	mu      sync.Mutex
 	results map[string]string // digest -> err reason
 	next    map[string]time.Time
+	last    Result
 }
 
 func (s *fakeStore) Target(_ context.Context, d string) (Target, bool, error) {
@@ -41,10 +42,10 @@ func (s *fakeStore) Target(_ context.Context, d string) (Target, bool, error) {
 	return Target{Ref: "r@" + d}, d != "gone", nil
 }
 
-func (s *fakeStore) SetResult(d string, _ []Finding, reason string, _, next time.Time) {
+func (s *fakeStore) SetResult(d string, r Result, reason string, _, next time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.results[d], s.next[d] = reason, next
+	s.results[d], s.next[d], s.last = reason, next, r
 }
 
 func (s *fakeStore) Due(time.Time) []string  { s.mu.Lock(); defer s.mu.Unlock(); return s.due }
@@ -64,7 +65,7 @@ func TestQueueWorkerCapAndResults(t *testing.T) {
 	q := &Queue{
 		Store: store, Workers: 2, RetryAfter: time.Hour, Log: logr.Discard(),
 		Wait: func(context.Context) error { return nil },
-		Scan: func(_ context.Context, tg Target) ([]Finding, error) {
+		Scan: func(_ context.Context, tg Target) (Result, error) {
 			calls.Add(1)
 			n := running.Add(1)
 			for {
@@ -76,9 +77,9 @@ func TestQueueWorkerCapAndResults(t *testing.T) {
 			<-release
 			running.Add(-1)
 			if tg.Ref == "r@bad" {
-				return nil, &ScanError{Reason: ReasonAuth}
+				return Result{}, &ScanError{Reason: ReasonAuth}
 			}
-			return []Finding{{Product: "Python"}}, nil
+			return Result{Findings: []Finding{{Product: "Python"}}}, nil
 		},
 	}
 	digests := []string{"a", "b", "c", "d", "bad", "a", "b"} // duplicates must be deduped
@@ -122,7 +123,7 @@ func TestQueueWaitsForDB(t *testing.T) {
 	q := &Queue{
 		Store: store, Workers: 1, Log: logr.Discard(),
 		Wait: func(ctx context.Context) error { <-ready; return nil },
-		Scan: func(context.Context, Target) ([]Finding, error) { scanned.Store(true); return nil, nil },
+		Scan: func(context.Context, Target) (Result, error) { scanned.Store(true); return Result{}, nil },
 	}
 	q.Add("a")
 	go func() { _ = q.Start(t.Context()) }()
@@ -147,7 +148,7 @@ func TestQueueDoesNotRescanInFlight(t *testing.T) {
 	q := &Queue{
 		Store: store, Workers: 1, Log: logr.Discard(),
 		Wait: func(context.Context) error { return nil },
-		Scan: func(context.Context, Target) ([]Finding, error) { calls.Add(1); <-release; return nil, nil },
+		Scan: func(context.Context, Target) (Result, error) { calls.Add(1); <-release; return Result{}, nil },
 	}
 	go func() { _ = q.Start(t.Context()) }() // the first tick adds "a" from Due
 	time.Sleep(100 * time.Millisecond)
@@ -172,8 +173,11 @@ func TestQueueObservesTargetErrors(t *testing.T) {
 	observed := make(chan string, 1)
 	q := &Queue{
 		Store: store, Workers: 1, RetryAfter: time.Hour, Log: logr.Discard(),
-		Wait:    func(context.Context) error { return nil },
-		Scan:    func(context.Context, Target) ([]Finding, error) { t.Error("scanned without a target"); return nil, nil },
+		Wait: func(context.Context) error { return nil },
+		Scan: func(context.Context, Target) (Result, error) {
+			t.Error("scanned without a target")
+			return Result{}, nil
+		},
 		Observe: func(_ time.Duration, reason string) { observed <- reason },
 	}
 	q.Add("noauth")
@@ -185,5 +189,33 @@ func TestQueueObservesTargetErrors(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("target error not observed")
+	}
+}
+
+func TestQueueTrivyFailure(t *testing.T) {
+	store := &fakeStore{results: map[string]string{}, next: map[string]time.Time{}}
+	q := &Queue{
+		Store: store, Workers: 1, RetryAfter: time.Hour, Log: logr.Discard(),
+		Wait: func(context.Context) error { return nil },
+		Scan: func(context.Context, Target) (Result, error) {
+			return Result{Findings: []Finding{{Product: "Python"}}, VulnErr: &ScanError{Reason: ReasonTrivy}}, nil
+		},
+	}
+	q.Add("a")
+	go func() { _ = q.Start(t.Context()) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !store.done(1) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.results["a"] != ReasonTrivy {
+		t.Errorf("reason = %q, want %q", store.results["a"], ReasonTrivy)
+	}
+	if len(store.last.Findings) != 1 || store.last.Vulns != nil {
+		t.Errorf("stored %+v; want the EOL findings and nil vulns", store.last)
+	}
+	if d := time.Until(store.next["a"]); d > time.Hour+time.Minute {
+		t.Errorf("next scan in %v, want the 1h retry, not the 24h interval", d)
 	}
 }

@@ -4,15 +4,33 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []            # for pulling the operator image itself
 
-# Rendered into XeolScanner/default.
+# Scan types; at least one must be on. Both read the SBOM of the same single syft run per image.
+eol:
+  enabled: true                 # end-of-life software, matched by xeol against the EOL database (db.*)
+trivy:
+  # Known vulnerabilities, matched by `trivy sbom` against trivy's database. Adds ~0.2s and ~150MB per scan.
+  # The database follows db.source: online downloads it at start and daily (~1.6 GB, egress to
+  # mirror.gcr.io or ghcr.io); mounted reads trivy.mounted.volume (see https://rishang.github.io/xeol-operator/air-gapped/).
+  enabled: false
+  dbRepository: []              # OCI repositories for the DB, e.g. [registry.local/aquasec/trivy-db:2]; empty = trivy's defaults
+  dbSizeLimit: 5Gi              # emptyDir for the DB in online mode: the current copy (~1.6 GB) plus one being downloaded, and growth
+  dbStaleDays: 7                # XeolVulnDatabaseStale threshold (prometheusRule)
+  mounted:
+    path: /trivy-db
+    # Any volume source holding <path>/db/trivy.db and db/metadata.json (trivy's cache layout),
+    # mounted read-only, e.g. persistentVolumeClaim: {claimName: trivy-db}
+    volume: {}
+
+# Rendered into the config file (ConfigMap <release>-config, mounted at /etc/xeol-operator/config.yaml).
+# Edits apply without a restart: helm upgrade, or kubectl edit the ConfigMap.
 scanner:
   namespaceSelector: {}         # e.g. {matchLabels: {xeol-scan: "true"}}; empty = all namespaces
   excludeNamespaces: ["kube-*"]
   excludeImages: []             # globs on the image reference
   interval: 24h                 # rescan each image digest this often
-  workloadKinds: []             # top-level kinds to scan; empty = CRD default [Deployment, StatefulSet, DaemonSet, Job, CronJob]
+  workloadKinds: null           # top-level kinds to scan; null = [Deployment, StatefulSet, DaemonSet, Job, CronJob], [] = every kind
   workloadLabels: []            # workload label keys copied onto metrics as k8s_label_<key>, e.g. [team]
-  # Accepted findings hidden from metrics, the JSON API and status (images are still scanned). See docs/crd.md.
+  # Accepted findings hidden from metrics, the JSON API and status (images are still scanned). See https://rishang.github.io/xeol-operator/configuration/.
   #   - products: [perl]                                   # endoflife.date slugs
   #     namespaces: [test]                                 # optional namespace globs
   #   - products: [gorilla]
@@ -20,17 +38,23 @@ scanner:
   #   - products: [python]
   #     cycles: ["3.8"]                                    # optional release cycles
   ignoreProducts: []
+  # Accepted vulnerabilities (trivy.enabled) hidden the same way. A rule needs ids, packages or both
+  # (both: that CVE in that package); namespaces and selector work as above.
+  #   - ids: [CVE-2024-1234]
+  #   - packages: [libcrypto3]
+  #     namespaces: [test]
+  ignoreVulnerabilities: []
   # Operator flags. A scan's memory depends on the image (small images ~200Mi); an image that needs
   # more than the pod's memory limit is skipped for 24h and reported as xeol_scan_errors_total{reason="oom"}.
   workers: 1
   timeout: 10m
-  goMemLimit: 800MiB            # GOMEMLIMIT for syft and xeol: keep below resources.limits.memory
-  maxProcs: 2                   # GOMAXPROCS for syft and xeol
+  goMemLimit: 800MiB            # GOMEMLIMIT for syft, xeol and trivy: keep below resources.limits.memory
+  maxProcs: 2                   # GOMAXPROCS for syft, xeol and trivy
 
 # EOL database xeol matches against.
 db:
   # online: the operator builds it from endoflife.date at start and daily (needs egress to endoflife.date).
-  # mounted: read a prebuilt DB from a volume (air-gapped; see docs/air-gapped.md).
+  # mounted: read a prebuilt DB from a volume (air-gapped; see https://rishang.github.io/xeol-operator/air-gapped/).
   source: online
   # online mode: endoflife.date products/full URL; point at an internal mirror if needed.
   url: https://endoflife.date/api/v1/products/full
@@ -80,6 +104,10 @@ ui:
 # browser requests are refused.
 mcp:
   enabled: false
+  # Add a "rescan" tool that queues an immediate rescan of all or matching images. The MCP endpoint
+  # has no auth, so anyone who reaches the port can queue rescans (at most one extra scan per image
+  # at a time). Without it, rescan from inside the pod: kubectl exec deploy/<release> -- /manager rescan
+  allowRescan: false
 
 # ServiceMonitor: the Prometheus Operator scrapes /metrics, so findings are in Prometheus for PromQL,
 # history and alerts. Needs the Prometheus Operator (e.g. kube-prometheus-stack).
@@ -94,6 +122,8 @@ serviceMonitor:
 #   XeolDatabaseStale       EOL database older than dbStaleDays
 #   XeolDatabaseMissing     no EOL database, so nothing is scanned
 #   XeolScanErrors          more than 5 failed scans with one reason in an hour
+#   XeolVulnDatabaseStale   trivy vulnerability database older than trivy.dbStaleDays (trivy.enabled)
+# The EOL rules are installed only with eol.enabled.
 # Needs the Prometheus Operator, and serviceMonitor.enabled (or your own scrape) for data.
 prometheusRule:
   enabled: false
@@ -102,7 +132,7 @@ prometheusRule:
   dbStaleDays: 30               # XeolDatabaseStale threshold
 
 # Grafana: two ConfigMaps, an Infinity datasource (uid xeol-operator) pointing at the JSON API and the
-# dashboard that uses it. Grafana's datasource and dashboard sidecars pick them up by label; the chart
+# dashboards that use it: xeol (EOL, with eol.enabled) and xeol-trivy (vulnerabilities, with trivy.enabled). Grafana's datasource and dashboard sidecars pick them up by label; the chart
 # never contacts Grafana. Needs the Infinity plugin (yesoreyeram-infinity-datasource) and sidecars
 # watching this namespace (searchNamespace: ALL). Doesn't need Prometheus.
 grafanaDatasource:

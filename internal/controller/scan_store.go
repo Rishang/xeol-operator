@@ -65,8 +65,8 @@ func (s *ScanStore) Target(ctx context.Context, digest string) (scanner.Target, 
 }
 
 // SetResult stores a scan result in memory and, if configured, on disk.
-func (s *ScanStore) SetResult(digest string, findings []scanner.Finding, errReason string, at, next time.Time) {
-	s.Inventory.SetResult(digest, findings, errReason, at, next)
+func (s *ScanStore) SetResult(digest string, r scanner.Result, errReason string, at, next time.Time) {
+	s.Inventory.SetResult(digest, r, errReason, at, next)
 	if s.Results == nil {
 		return
 	}
@@ -74,7 +74,7 @@ func (s *ScanStore) SetResult(digest string, findings []scanner.Finding, errReas
 	if !ok {
 		return
 	}
-	rec := results.Record{Scanned: img.Scanned, Next: img.Next, ErrReason: img.ErrReason, Findings: img.Findings}
+	rec := results.Record{Scanned: img.Scanned, Next: img.Next, ErrReason: img.ErrReason, Findings: img.Findings, Vulns: img.Vulns}
 	if err := s.Results.Save(digest, rec); err != nil {
 		s.Log.Error(err, "saving scan result", "digest", digest)
 	}

@@ -13,6 +13,12 @@ metadata:
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 data:
+  {{- if .Values.eol.enabled }}
   xeol.json: |-
 {{ .Files.Get "dashboards/xeol.json" | indent 4 }}
+  {{- end }}
+  {{- if .Values.trivy.enabled }}
+  xeol-trivy.json: |-
+{{ .Files.Get "dashboards/xeol-trivy.json" | indent 4 }}
+  {{- end }}
 {{- end }}
