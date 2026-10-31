@@ -38,7 +38,8 @@ var toolDescriptions = map[string]string{
 	"findings":   "End-of-life products in running workloads that are already EOL or reach EOL within within_days, soonest first: product, cycle, EOL date, days left, image, package, endoflife.date URL.",
 }
 
-// mcp serves the JSON API's four endpoints as read-only MCP tools over Streamable HTTP, stateless.
+// mcp serves the JSON API's four endpoints as read-only MCP tools over Streamable HTTP, stateless, plus
+// the opt-in rescan tool.
 func (h *Handler) mcp() http.Handler {
 	s := mcp.NewServer(&mcp.Implementation{Name: "xeol-operator", Version: "v1"}, nil)
 	for name, fn := range h.endpoints() {
@@ -58,6 +59,26 @@ func (h *Handler) mcp() http.Handler {
 				}
 				// Text, not structured content: findings and workloads are arrays, which older clients reject there.
 				b, err := json.Marshal(fn(q))
+				if err != nil {
+					return nil, nil, err
+				}
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil, nil
+			})
+	}
+	if h.MCPRescan { // Rescan is wired after the routes are built (cmd/main.go); h.rescan checks it per call
+		// The one tool that changes something: off unless --mcp-allow-rescan. It only queues scans, which
+		// the queue dedupes per image, so a caller can cost at most one extra scan of each image at a time.
+		destructive := false
+		mcp.AddTool(s, &mcp.Tool{Name: "rescan",
+			Description: "Queue an immediate rescan of the running images matching the image globs, or of every running image " +
+				"without globs. Returns the queued images; results update as each scan finishes (see status).",
+			Annotations: &mcp.ToolAnnotations{IdempotentHint: true, DestructiveHint: &destructive}},
+			func(_ context.Context, _ *mcp.CallToolRequest, in RescanRequest) (*mcp.CallToolResult, any, error) {
+				res, err := h.rescan(in)
+				if err != nil {
+					return nil, nil, err
+				}
+				b, err := json.Marshal(res)
 				if err != nil {
 					return nil, nil, err
 				}

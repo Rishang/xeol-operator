@@ -108,7 +108,8 @@ The scan queue decides which digests get scanned and when. It is a client-go wor
 How digests get queued and run:
 
 - The Pod controller adds new digests straight away.
-- A ticker adds digests whose next scan time has passed. It runs every `--scan-check-interval` (Helm `scanner.checkInterval`, default `1m`).
+- A ticker adds digests whose next scan time has passed. It runs every minute.
+- `manager rescan` (or the opt-in MCP `rescan` tool) adds the matching digests straight away. The CLI reaches the operator through a loopback-only listener (`--admin-bind-address`, default `127.0.0.1:8082`), so only processes in the pod can use it.
 - `eol.enabled` (default on) and `trivy.enabled` (default off) choose the scan types. At least one must be on.
 - Scanning starts only once the database of every enabled scan type is ready.
 - `--scan-workers` (default `1`) sets how many scans run at once. Each scan needs its own memory.
@@ -269,6 +270,7 @@ The chart runs one replica with leader election on. Leader election means that, 
 - **Pull secrets are handled briefly.** They are read one `get` at a time when a scan starts. They are never cached or listed. They are written to a `0600` file in that scan's temp dir and deleted with it. They are never logged.
 - **The container is locked down.** It runs as non-root with a read-only root filesystem. Every writable path is one of the emptyDirs above.
 - **There is no login.** The web page, MCP and JSON API have no login. Reach them with `port-forward`, and keep them off public Ingress.
+- **Rescans need pod access.** `manager rescan` uses a listener bound to loopback, so the Kubernetes permission to `exec` into the pod decides who may rescan. The MCP `rescan` tool is off unless `mcp.allowRescan` is set. Everything else on port 8080 is read-only.
 
 ## Design choices
 

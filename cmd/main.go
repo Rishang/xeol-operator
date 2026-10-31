@@ -70,6 +70,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "build-db" {
 		os.Exit(buildDB(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "rescan" {
+		os.Exit(rescanCmd(os.Args[2:], os.Stdout, os.Stderr))
+	}
 
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -80,7 +83,8 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	var scanWorkers int
 	var scanTimeout time.Duration
-	var serveUI, serveMCP bool
+	var serveUI, serveMCP, mcpRescan bool
+	var adminAddr string
 	var dbSource, dbDir, xeolBin, syftBin, stateDir, eolURL, scanMemoryLimit string
 	var scanMaxProcs int
 	var configPath string
@@ -104,6 +108,10 @@ func main() {
 	flag.DurationVar(&scanTimeout, "scan-timeout", 5*time.Minute, "Timeout for one image scan.")
 	flag.BoolVar(&serveUI, "ui", false, "Serve the HTML UI at / on the metrics port.")
 	flag.BoolVar(&serveMCP, "mcp", false, "Serve the findings as MCP tools (Streamable HTTP) at /mcp on the metrics port.")
+	flag.BoolVar(&mcpRescan, "mcp-allow-rescan", false,
+		"Add the MCP rescan tool (queues rescans; the MCP endpoint has no auth). Needs --mcp.")
+	flag.StringVar(&adminAddr, "admin-bind-address", defaultAdminAddr,
+		"Loopback address for `manager rescan` (POST /rescan); \"0\" disables it.")
 	flag.StringVar(&dbSource, "db-source", "online",
 		"Database source: online (build the EOL DB from endoflife.date and download the trivy DB daily) "+
 			"or mounted (read --db-dir and --trivy-db-dir).")
@@ -164,7 +172,8 @@ func main() {
 	// The JSON API (for Grafana's Infinity datasource), the UI and MCP share the metrics port; the
 	// handler's data fields are filled in once the manager and inventory exist.
 	// The routes depend on the scan types, so they are set before Routes() below.
-	apiHandler := &api.Handler{Now: time.Now, UI: serveUI, MCP: serveMCP, Trivy: trivyScan, EOL: eolScan}
+	apiHandler := &api.Handler{Now: time.Now, UI: serveUI, MCP: serveMCP, MCPRescan: mcpRescan,
+		Trivy: trivyScan, EOL: eolScan}
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
 		SecureServing: secureMetrics,
@@ -300,6 +309,17 @@ func main() {
 		os.Exit(1)
 	}
 	apiHandler.Inventory, apiHandler.Config = inventory, scanCfg
+	apiHandler.Rescan = func(globs []string) []string { return inventory.Rescan(globs, queue.Add) }
+	if adminAddr != "0" {
+		if err := loopbackOnly(adminAddr); err != nil {
+			setupLog.Error(err, "Invalid --admin-bind-address", "address", adminAddr)
+			os.Exit(1)
+		}
+		if err := mgr.Add(adminServer{addr: adminAddr, handler: apiHandler.Admin()}); err != nil {
+			setupLog.Error(err, "Failed to add admin listener")
+			os.Exit(1)
+		}
+	}
 	apiHandler.DBBuilt, apiHandler.VulnDBUpdated = dbs.Built, dbs.Updated
 	apiHandler.Leader = func() bool {
 		select {

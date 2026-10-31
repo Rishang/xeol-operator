@@ -17,4 +17,4 @@
 
 ## 4. Verify on k3d
 
-- [ ] 4.1 With trivy on, add a rule for one CVE to the ConfigMap; verify it disappears from `/api/v1/vulnerabilities` and the counts drop, without a restart
+- [x] 4.1 With trivy on, add a rule for one CVE to the ConfigMap; verify it disappears from `/api/v1/vulnerabilities` and the counts drop, without a restart

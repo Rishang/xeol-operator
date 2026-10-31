@@ -245,6 +245,8 @@ claude mcp add --transport http xeol http://localhost:8080/mcp
 
 Then ask, for example, "which workloads in prod run software that is already end of life?"
 
+With `mcp.allowRescan` as well, the assistant gets a `rescan` tool too; see [Rescan now](#8-rescan-now).
+
 <Aside type="caution" title="No authentication">
 The web page, JSON API and MCP have no authentication. Reach them through `kubectl port-forward`. Don't expose port 8080 through a public Ingress or LoadBalancer.
 </Aside>
@@ -356,6 +358,31 @@ To see which images fail on credentials, check `xeol_scan_errors_total{reason="a
 For this to work, the operator needs `get` on Secrets in every namespace. The chart grants it, and the operator never lists Secrets. If that's too broad for your cluster, skip those images with `excludeImages`.
 
 Does the operator's own image come from a private registry? Then set `imagePullSecrets` in the chart values. That's a separate setting, for the operator's pod.
+
+## 8. Rescan now
+
+Each image is rescanned `interval` (default 24h) after its last scan. To get fresh results sooner, for example after you've updated an image or accepted new EOL data, queue a rescan yourself. Nothing restarts, and the databases are not refreshed.
+
+From inside the operator's pod:
+
+```bash
+kubectl -n xeol-system exec deploy/xeol-operator -- /manager rescan                    # every running image
+kubectl -n xeol-system exec deploy/xeol-operator -- /manager rescan 'python:3.8*' 'registry.internal/*'
+```
+
+```text
+queued 2 image(s) for a rescan:
+  python:3.8-slim
+  registry.internal/team/app:v1
+```
+
+- The globs use the same syntax as `excludeImages`. They match the image as written in the Pod spec (`python:3.8-slim`) or its repository (`docker.io/library/python`). Quote them so your shell doesn't expand `*`.
+- Rescans go through the normal scan queue. An image already queued or being scanned isn't scanned twice, and an image skipped after an out-of-memory kill stays skipped.
+- Follow progress in `/api/v1/status` or the logs.
+
+**Who can do this:** anyone allowed to `exec` into the operator's pod. The command talks to the operator over a loopback-only port (`127.0.0.1:8082`), so nothing new is reachable from outside the pod.
+
+**From an AI assistant:** set `mcp.allowRescan=true` (with `mcp.enabled`) to add a `rescan` tool with the same optional image globs. It's off by default, because the MCP endpoint has no authentication: anyone who reaches port 8080 could then queue rescans. The cost is bounded, at most one extra scan of each image at a time.
 
 ## Troubleshooting
 

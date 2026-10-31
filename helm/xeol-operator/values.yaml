@@ -104,6 +104,10 @@ ui:
 # browser requests are refused.
 mcp:
   enabled: false
+  # Add a "rescan" tool that queues an immediate rescan of all or matching images. The MCP endpoint
+  # has no auth, so anyone who reaches the port can queue rescans (at most one extra scan per image
+  # at a time). Without it, rescan from inside the pod: kubectl exec deploy/<release> -- /manager rescan
+  allowRescan: false
 
 # ServiceMonitor: the Prometheus Operator scrapes /metrics, so findings are in Prometheus for PromQL,
 # history and alerts. Needs the Prometheus Operator (e.g. kube-prometheus-stack).

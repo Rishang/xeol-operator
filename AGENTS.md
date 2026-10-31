@@ -21,7 +21,7 @@ In:
 Out (until asked for):
 - Vulnerability scanning beyond `trivy sbom` on the syft SBOM: no `trivy image` scans (`trivy image --download-db-only` only fetches the DB, `internal/vulndb`), no secret/misconfig/license scanners, no VEX. Accepted vulnerabilities are hidden at export by `ignoreVulnerabilities`, not passed to trivy.
 - An external database, or pushing to Grafana. Grafana reads Prometheus and the operator's JSON API.
-- Auth, Ingress or write actions for the built-in UI/MCP.
+- Auth, Ingress or write actions for the built-in UI/MCP. The one exception is rescanning (2026-10-31): `manager rescan` through a loopback-only admin listener (guarded by `pods/exec` RBAC), and the MCP `rescan` tool only with `--mcp-allow-rescan`.
 - Webhooks or admission control that block EOL images.
 
 ## Stack
@@ -61,7 +61,7 @@ ignoreVulnerabilities:       # same scoping; a rule needs ids and/or packages (b
 
 Globs (`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces`, `ignoreVulnerabilities[].namespaces`): only `*` (anything, `/` included) and `?` (one character) are special; every string is a valid glob.
 
-Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`.
+Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`, `--mcp-allow-rescan` (default false), `--admin-bind-address` (loopback only, default `127.0.0.1:8082`).
 
 Add fields only when a real use case needs them.
 

@@ -55,6 +55,10 @@ type Handler struct {
 	Now    func() time.Time
 	// UI serves the HTML page at /; MCP serves the same data as MCP tools at /mcp.
 	UI, MCP bool
+	// Rescan queues the running images matching globs (all with none) and returns their refs. It backs
+	// the admin listener's POST /rescan and, with MCPRescan (--mcp-allow-rescan), the MCP rescan tool.
+	Rescan    func(globs []string) []string
+	MCPRescan bool
 }
 
 // Routes returns the handlers to mount, keyed by path.

@@ -275,6 +275,7 @@ These settings control how findings reach you and where the pod runs. All are He
 | `grafanaDatasource.enabled`, `.labels`; `grafanaDashboard.labels`, `.annotations` | `false` | The Infinity datasource and dashboards. |
 | `ui.enabled` | `false` | Built-in web page at `/`. |
 | `mcp.enabled` | `false` | MCP tools at `/mcp` for AI assistants. |
+| `mcp.allowRescan` | `false` | Adds the MCP `rescan` tool; see [Rescan now](/xeol-operator/usage/#8-rescan-now). |
 | `metrics.port` | `8080` | Port for `/metrics`, the JSON API, the web page and MCP. |
 | `replicas` | `1` | Extra replicas are standby (leader election). |
 | `image.repository`, `image.tag`, `image.pullPolicy`, `imagePullSecrets` | Docker Hub, chart version | The operator image, e.g. from an internal mirror. |

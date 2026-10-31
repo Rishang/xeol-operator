@@ -191,7 +191,7 @@
   <path class="ln" d="M470 340 V370 H548" marker-end="url(#ah)"/>
   <text class="lbl" x="376" y="388">new digest, not current</text>
   <path class="ln" d="M648 280 V330" marker-end="url(#ah)"/>
-  <text class="lbl" x="656" y="304">due, every checkInterval</text>
+  <text class="lbl" x="656" y="304">due, checked every minute</text>
   <path class="ln" d="M700 410 V450" marker-end="url(#ah)"/>
   <path class="ln" d="M232 534 H304" marker-end="url(#ah)"/>
   <path class="ln" d="M442 534 H455" marker-end="url(#ah)"/>

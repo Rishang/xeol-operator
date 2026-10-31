@@ -95,6 +95,9 @@ spec:
             {{- end }}
             {{- if .Values.mcp.enabled }}
             - --mcp
+            {{- if .Values.mcp.allowRescan }}
+            - --mcp-allow-rescan
+            {{- end }}
             {{- end }}
           env:
             - name: TMPDIR

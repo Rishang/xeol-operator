@@ -117,6 +117,8 @@ scanner:
 
 Changes apply without a restart, from `helm upgrade` or `kubectl edit configmap xeol-operator-config`; a bad edit is rejected and the previous config stays ([Configuration](https://rishang.github.io/xeol-operator/configuration/)). Memory, timeouts, workers and the air-gapped DB are covered in [Helm setup](https://rishang.github.io/xeol-operator/helm/).
 
+To rescan now instead of waiting for `interval`: `kubectl -n xeol-system exec deploy/xeol-operator -- /manager rescan ['python:3.8*' ...]` (every running image without globs). An AI assistant can do the same through MCP with `mcp.allowRescan=true` ([Rescan now](https://rishang.github.io/xeol-operator/usage/#8-rescan-now)).
+
 ## Metrics
 
 | Metric | Value | Labels |

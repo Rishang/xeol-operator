@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -160,6 +161,25 @@ func (inv *Inventory) Images() []Image {
 	return out
 }
 
+// Match returns the running images whose ref (as written in the Pod spec) or repository matches any
+// glob, with excludeImages' glob syntax; every image when globs is empty. The globs are compiled per
+// call, not cached: they come from rescan requests, not the config file.
+func (inv *Inventory) Match(globs []string) []Image {
+	res := make([]*regexp.Regexp, 0, len(globs))
+	for _, g := range globs {
+		res = append(res, globRegexp(g))
+	}
+	var out []Image
+	for _, img := range inv.Images() {
+		if len(res) == 0 || slices.ContainsFunc(res, func(re *regexp.Regexp) bool {
+			return re.MatchString(img.Ref) || re.MatchString(img.Repo)
+		}) {
+			out = append(out, img)
+		}
+	}
+	return out
+}
+
 func snapshot(digest string, e *entry) Image {
 	img := Image{Digest: digest, Scanned: e.scanned, Next: e.next, Findings: e.findings, Vulns: e.vulns, ErrReason: e.errReason}
 	seenW := map[string]bool{}
@@ -220,4 +240,16 @@ func (inv *Inventory) Due(now time.Time) []string {
 	}
 	slices.Sort(due)
 	return due
+}
+
+// Rescan queues every running image matching globs (all of them with none) for a scan now and returns
+// their refs. The scan queue dedupes, so a digest already queued or being scanned is not scanned twice.
+func (inv *Inventory) Rescan(globs []string, enqueue func(digest string)) []string {
+	imgs := inv.Match(globs)
+	refs := make([]string, 0, len(imgs))
+	for _, img := range imgs {
+		enqueue(img.Digest)
+		refs = append(refs, img.Ref)
+	}
+	return refs
 }

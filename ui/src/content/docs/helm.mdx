@@ -214,6 +214,8 @@ claude mcp add --transport http xeol http://localhost:8080/mcp
 
 **Leave it off** if you don't use MCP clients. Like the web page, it has no authentication. Cross-origin browser requests are refused, so a web page can't call it.
 
+**`mcp.allowRescan`** (default `false`) adds a fifth tool, `rescan`, that queues an immediate rescan of all or matching images. It's the only tool that changes anything, so it's opt-in: anyone who reaches the port could queue rescans. Without it, rescan from inside the pod; see [Rescan now](/xeol-operator/usage/#8-rescan-now).
+
 ### Scan types: `eol.enabled`, `trivy.enabled`
 
 syft pulls and catalogs each image once. The resulting SBOM (a list of the software in the image) then goes to each enabled scanner. At least one scanner must be on; otherwise the chart refuses to render.
@@ -324,6 +326,7 @@ Recipes: [Air-gapped installation](/xeol-operator/air-gapped/).
 | `metrics.port` | `8080` | Plain HTTP. Serves `/metrics`, the JSON API, and the UI and MCP when enabled. |
 | `ui.enabled` | `false` | Server-rendered HTML UI at `/` (findings, workloads, namespaces). |
 | `mcp.enabled` | `false` | MCP over HTTP at `/mcp`, with read-only tools. |
+| `mcp.allowRescan` | `false` | Adds the MCP `rescan` tool. No auth: anyone who reaches the port can queue rescans. |
 | `serviceMonitor.enabled` / `interval` / `labels` | `false` / `60s` / `{}` | Add e.g. `{release: kube-prom-stack}` if your Prometheus selects by label. |
 | `prometheusRule.enabled` / `labels` | `false` / `{}` | Alert rules only; see [Alerts](#alerts-prometheusruleenabled). |
 | `prometheusRule.eolSoonDays` | `90` | Threshold for `XeolEOLSoftwareSoon`. |
