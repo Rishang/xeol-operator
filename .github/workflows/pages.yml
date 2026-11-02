@@ -9,7 +9,7 @@ name: Pages
 on:
   push:
     branches: [main]
-    paths: ['ui/**', '.github/workflows/pages.yml']
+    paths: ['ui/**', 'helm/xeol-operator/values.yaml', '.github/workflows/pages.yml']
   workflow_call: # from release.yml, once the release's chart is attached
   workflow_dispatch:
 

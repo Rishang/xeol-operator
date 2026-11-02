@@ -3,7 +3,8 @@ title: Configuration
 description: "The scan config file: which images get scanned, how often, what to ignore, live reload and errors."
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Aside, Code, Steps } from '@astrojs/starlight/components';
+import chartValues from '../../../../helm/xeol-operator/values.yaml?raw';
 
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/xeol-operator)](https://artifacthub.io/packages/helm/xeol-operator/xeol-operator)
 
@@ -415,6 +416,12 @@ excludeImages:
   - "registry.internal/*"              # registry.internal/app and registry.internal/team/app
   - "docker.io/library/busybox"
 ```
+
+## Default Helm values
+
+The chart's `values.yaml`, loaded from the repository at build time. The `scanner.*` values become the config file above; the rest are described in [Helm setup](/xeol-operator/helm/#values).
+
+<Code code={chartValues} lang="yaml" title="helm/xeol-operator/values.yaml" />
 
 ## Upgrading from the XeolScanner CRD
 
