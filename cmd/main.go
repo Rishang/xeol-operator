@@ -82,7 +82,7 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var scanWorkers int
-	var scanTimeout time.Duration
+	var scanTimeout, scanCheckInterval time.Duration
 	var serveUI, serveMCP, mcpRescan bool
 	var adminAddr string
 	var dbSource, dbDir, xeolBin, syftBin, stateDir, eolURL, scanMemoryLimit string
@@ -106,6 +106,8 @@ func main() {
 		"GOMEMLIMIT for syft and xeol, e.g. 800MiB; empty leaves it unset.")
 	flag.IntVar(&scanMaxProcs, "scan-max-procs", 2, "GOMAXPROCS for syft and xeol; 0 leaves it unset.")
 	flag.DurationVar(&scanTimeout, "scan-timeout", 5*time.Minute, "Timeout for one image scan.")
+	flag.DurationVar(&scanCheckInterval, "scan-check-interval", time.Minute,
+		"How often images due for a rescan are queued; the rescan interval itself is the config file's interval.")
 	flag.BoolVar(&serveUI, "ui", false, "Serve the HTML UI at / on the metrics port.")
 	flag.BoolVar(&serveMCP, "mcp", false, "Serve the findings as MCP tools (Streamable HTTP) at /mcp on the metrics port.")
 	flag.BoolVar(&mcpRescan, "mcp-allow-rescan", false,
@@ -282,6 +284,7 @@ func main() {
 			Results: resultsDB, Log: ctrl.Log.WithName("scan")},
 		Workers:    scanWorkers,
 		RetryAfter: time.Hour,
+		CheckEvery: scanCheckInterval,
 		Wait:       dbs.Wait,
 		Observe:    metrics.Observe,
 		Log:        ctrl.Log.WithName("scan"),

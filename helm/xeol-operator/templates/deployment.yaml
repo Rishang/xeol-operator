@@ -70,6 +70,7 @@ spec:
             - --metrics-secure=false
             - --scan-workers={{ .Values.scanner.workers }}
             - --scan-timeout={{ .Values.scanner.timeout }}
+            - --scan-check-interval={{ .Values.scanner.checkInterval }}
             - --db-source={{ .Values.db.source }}
             - --db-dir={{ include "xeol-operator.dbDir" . }}
             - --eol-url={{ .Values.db.url }}

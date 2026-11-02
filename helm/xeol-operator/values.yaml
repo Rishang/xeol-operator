@@ -48,6 +48,7 @@ scanner:
   # more than the pod's memory limit is skipped for 24h and reported as xeol_scan_errors_total{reason="oom"}.
   workers: 1
   timeout: 10m
+  checkInterval: 1m             # how often images due for a rescan are queued (rescan interval is `interval`)
   goMemLimit: 800MiB            # GOMEMLIMIT for syft, xeol and trivy: keep below resources.limits.memory
   maxProcs: 2                   # GOMAXPROCS for syft, xeol and trivy
 

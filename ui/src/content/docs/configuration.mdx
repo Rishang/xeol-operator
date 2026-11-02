@@ -254,6 +254,7 @@ Fixed by design:
 | `namespaceSelector`, `excludeNamespaces`, `excludeImages`, `workloadKinds` | config file (live) | see [Fields](#fields) | Which running images are scanned at all. |
 | `scanner.workers` | Helm (`--scan-workers`) | `1` | Images scanned at the same time. Memory use adds up per worker. |
 | `scanner.timeout` | Helm | `10m` | Limit for one image's whole scan: syft, xeol and trivy. |
+| `scanner.checkInterval` | Helm (`--scan-check-interval`) | `1m` | How often images due for a rescan are queued. New images are queued at once. |
 | `scanner.goMemLimit`, `scanner.maxProcs` | Helm | `800MiB`, `2` | `GOMEMLIMIT` and `GOMAXPROCS` for syft, xeol and trivy. |
 | `scanTmp.sizeLimit` | Helm | `4Gi` | Scratch space for the image layers syft unpacks. |
 | `resources.limits.memory` | Helm | `1Gi` | The pod's memory. |

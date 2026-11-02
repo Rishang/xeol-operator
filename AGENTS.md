@@ -61,7 +61,7 @@ ignoreVulnerabilities:       # same scoping; a rule needs ids and/or packages (b
 
 Globs (`excludeNamespaces`, `excludeImages`, `ignoreProducts[].namespaces`, `ignoreVulnerabilities[].namespaces`): only `*` (anything, `/` included) and `?` (one character) are special; every string is a valid glob.
 
-Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`, `--mcp-allow-rescan` (default false), `--admin-bind-address` (loopback only, default `127.0.0.1:8082`).
+Pod-level settings are operator flags set by Helm, not config file fields (they need a restart anyway): `--scan-workers` (default 1), `--scan-check-interval` (default 1m, how often due rescans are queued), `--scan-memory-limit` (GOMEMLIMIT for xeol), `--scan-max-procs` (GOMAXPROCS), `--db-source` (`online` | `mounted`), `--db-dir`, `--state-dir`, `--eol` (default true), `--trivy` (default false), `--trivy-bin`, `--trivy-db-dir`, `--trivy-db-repository`, `--mcp-allow-rescan` (default false), `--admin-bind-address` (loopback only, default `127.0.0.1:8082`).
 
 Add fields only when a real use case needs them.
 

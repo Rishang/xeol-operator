@@ -296,6 +296,7 @@ Details:
 |---|---|---|
 | `scanner.workers` | `1` | Concurrent scans. Each needs its own memory headroom. |
 | `scanner.timeout` | `10m` | Per image. |
+| `scanner.checkInterval` | `1m` | How often images due for a rescan are queued. New images are queued at once; how often an image is rescanned is `scanner.interval`. |
 | `scanner.goMemLimit` | `800MiB` | `GOMEMLIMIT` for syft, xeol and trivy. Keep it below `resources.limits.memory`. |
 | `scanner.maxProcs` | `2` | `GOMAXPROCS` for syft, xeol and trivy. |
 | `resources` | requests 100m / 256Mi, limit 1Gi | Pod CPU and memory. |

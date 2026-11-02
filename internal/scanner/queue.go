@@ -46,6 +46,8 @@ type Queue struct {
 	Workers int
 	// RetryAfter is how soon a failed scan is retried.
 	RetryAfter time.Duration
+	// CheckEvery is how often digests past their next scan time are queued; 0 means a minute.
+	CheckEvery time.Duration
 	// Wait blocks until scans can run (the EOL database is ready).
 	Wait func(ctx context.Context) error
 	// Observe records each scan's duration and error reason ("" on success).
@@ -83,7 +85,11 @@ func (q *Queue) Start(ctx context.Context) error {
 			}
 		})
 	}
-	tick := time.NewTicker(time.Minute)
+	every := q.CheckEvery
+	if every <= 0 {
+		every = time.Minute
+	}
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
 		if due := q.Store.Due(time.Now()); len(due) > 0 {

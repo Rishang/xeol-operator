@@ -111,7 +111,7 @@ The scan queue decides which digests get scanned and when. It is a client-go wor
 How digests get queued and run:
 
 - The Pod controller adds new digests straight away.
-- A ticker adds digests whose next scan time has passed. It runs every minute.
+- A ticker adds digests whose next scan time has passed. It runs every `scanner.checkInterval` (default 1m).
 - `manager rescan` (or the opt-in MCP `rescan` tool) adds the matching digests straight away. The CLI reaches the operator through a loopback-only listener (`--admin-bind-address`, default `127.0.0.1:8082`), so only processes in the pod can use it.
 - `eol.enabled` (default on) and `trivy.enabled` (default off) choose the scan types. At least one must be on.
 - Scanning starts only once the database of every enabled scan type is ready.
