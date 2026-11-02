@@ -171,7 +171,7 @@ Taskfile.yml
 
 ## Local test cluster
 
-- Use the k3d cluster, context `k3d-k3s-default` (k3s v1.31, containerd, single node).
+- Use the k3d cluster, context `k3d-k3s-default` (k3s v1.35, containerd, single node; e2e pins the same `K3S_IMAGE` in `Taskfile.yml`).
 - The kubeconfig also holds production contexts (EKS, AKS). Always pass `--context k3d-k3s-default` / `--kube-context k3d-k3s-default` explicitly on every `kubectl` and `helm` command. Never rely on the current context, and never run against any other context.
 - Load locally built images with `k3d image import <image> -c k3s-default` instead of pushing to a registry.
 - kube-prometheus-stack (namespace `monitoring`, release `kube-prom-stack`) picks up ServiceMonitors, PrometheusRules and dashboard ConfigMaps from any namespace.
