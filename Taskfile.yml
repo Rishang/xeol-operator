@@ -6,6 +6,7 @@ vars:
   KUBE_CONTEXT: '{{.KUBE_CONTEXT | default "k3d-k3s-default"}}'
   K3D_CLUSTER: '{{.K3D_CLUSTER | default "k3s-default"}}'
   E2E_CLUSTER: '{{.E2E_CLUSTER | default "xeol-e2e"}}'
+  K3S_IMAGE: rancher/k3s:v1.35.5-k3s1  # pinned: k3d's default k3s moves with each k3d release
   CHART: helm/xeol-operator
   NS: xeol-system
   LOCALBIN: '{{.ROOT_DIR}}/bin'
@@ -52,10 +53,15 @@ tasks:
       KUBECONFIG: '{{.LOCALBIN}}/e2e.kubeconfig'
       CTX: k3d-{{.E2E_CLUSTER}}
     cmds:
-      - k3d cluster create {{.E2E_CLUSTER}} --no-lb --k3s-arg '--disable=traefik@server:0' --kubeconfig-update-default=false --wait
+      - k3d cluster create {{.E2E_CLUSTER}} --image {{.K3S_IMAGE}} --no-lb --k3s-arg '--disable=traefik@server:0' --kubeconfig-update-default=false --wait
       - defer: k3d cluster delete {{.E2E_CLUSTER}}
       - mkdir -p {{.LOCALBIN}} && k3d kubeconfig get {{.E2E_CLUSTER}} > {{.KUBECONFIG}}
-      - k3d image import {{.IMG}} -c {{.E2E_CLUSTER}}
+      # k3s keeps settling after `--wait`: an import then can hit a restarting containerd (ctr EOF), and k3d still exits 0.
+      # So wait for the node, then retry until the image is really in the node.
+      - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} wait --for=condition=Ready node --all --timeout=2m
+      - >-
+        for i in 1 2 3; do k3d image import {{.IMG}} -c {{.E2E_CLUSTER}};
+        docker exec k3d-{{.E2E_CLUSTER}}-server-0 crictl inspecti {{.IMG}} >/dev/null 2>&1 && exit 0; sleep 10; done; exit 1
       - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} create ns {{.NS}}
       - kubectl --kubeconfig {{.KUBECONFIG}} --context {{.CTX}} label ns {{.NS}} pod-security.kubernetes.io/enforce=restricted
       - >-
